@@ -83,10 +83,8 @@ async fn reader(mut rx: UartRx<'static, Async>, signal: &'static Signal<NoopRawM
                         log_i += 1;
                         if log_i % 20 == 1 {
                             println!(
-                                "Packet {}: angle={}°, speed={} RPM, distances=[{}, {}, {}, {}] mm",
+                                "Packet {}: distances=[{}, {}, {}, {}] mm",
                                 log_i,
-                                parsed.angle,
-                                parsed.speed,
                                 parsed.distances[0],
                                 parsed.distances[1],
                                 parsed.distances[2],
