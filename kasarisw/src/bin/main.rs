@@ -25,12 +25,9 @@ const READ_BUF_SIZE: usize = 64;
 #[embassy_executor::task]
 async fn writer(mut tx: UartTx<'static, Async>, signal: &'static Signal<NoopRawMutex, usize>) {
     use core::fmt::Write;
-    embedded_io_async::Write::write(
-        &mut tx,
-        b"Hello async serial\r\n",
-    )
-    .await
-    .unwrap();
+    embedded_io_async::Write::write(&mut tx, b"Hello async serial\r\n")
+        .await
+        .unwrap();
     embedded_io_async::Write::flush(&mut tx).await.unwrap();
     loop {
         let bytes_read = signal.wait().await;
@@ -46,7 +43,7 @@ async fn reader(mut rx: UartRx<'static, Async>, signal: &'static Signal<NoopRawM
     let mut rbuf: [u8; MAX_BUFFER_SIZE] = [0u8; MAX_BUFFER_SIZE];
     let mut offset = 0;
     let mut ring_buf: ConstGenericRingBuffer<u8, MAX_BUFFER_SIZE> = ConstGenericRingBuffer::new();
-	let mut log_i: u32 = 0;
+    let mut log_i: u32 = 0;
 
     loop {
         // Original reading method
@@ -83,13 +80,17 @@ async fn reader(mut rx: UartRx<'static, Async>, signal: &'static Signal<NoopRawM
 
                     // Parse and print packet
                     if let Some(parsed) = parse_packet(&packet) {
-						log_i += 1;
-						if log_i % 20 == 1 {
+                        log_i += 1;
+                        if log_i % 20 == 1 {
                             println!(
                                 "Packet {}: angle={}°, speed={} RPM, distances=[{}, {}, {}, {}] mm",
-                                log_i, parsed.angle, parsed.speed,
-                                parsed.distances[0], parsed.distances[1],
-                                parsed.distances[2], parsed.distances[3]
+                                log_i,
+                                parsed.angle,
+                                parsed.speed,
+                                parsed.distances[0],
+                                parsed.distances[1],
+                                parsed.distances[2],
+                                parsed.distances[3]
                             );
                         }
                     } else {
@@ -110,8 +111,8 @@ async fn reader(mut rx: UartRx<'static, Async>, signal: &'static Signal<NoopRawM
 
 // Parsed packet data
 struct ParsedPacket {
-    angle: u16,        // degrees (0–360)
-    speed: u16,        // RPM
+    angle: u16,          // degrees (0–360)
+    speed: u16,          // RPM
     distances: [u16; 4], // mm
 }
 
