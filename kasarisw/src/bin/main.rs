@@ -9,8 +9,11 @@ use esp_backtrace as _;
 use esp_hal::{
     gpio::{AnyPin, Level, Output, OutputConfig, Pin},
     timer::timg::TimerGroup,
-    uart::{Config, RxConfig, Uart, UartRx, UartTx},
+    uart::{Uart, UartRx, UartTx},
+    uart,
     Async,
+    spi::master::Spi,
+    time::Rate,
 };
 use esp_println::println;
 use ringbuffer::{ConstGenericRingBuffer, RingBuffer};
@@ -202,8 +205,8 @@ async fn main(spawner: Spawner) {
     // Default pins for Uart communication
     let (tx_pin, rx_pin) = (peripherals.GPIO17, peripherals.GPIO16);
 
-    let config = Config::default()
-        .with_rx(RxConfig::default().with_fifo_full_threshold(READ_BUF_SIZE as u16))
+    let config = uart::Config::default()
+        .with_rx(uart::RxConfig::default().with_fifo_full_threshold(READ_BUF_SIZE as u16))
         .with_baudrate(115200);
 
     let uart2 = Uart::new(peripherals.UART2, config)
@@ -213,6 +216,31 @@ async fn main(spawner: Spawner) {
         .into_async();
 
     let (rx, tx) = uart2.split();
+
+    // SPI (ADXL373)
+
+    let sclk = peripherals.GPIO18;
+    let miso = peripherals.GPIO19;
+    let mosi = peripherals.GPIO23;
+    let cs = peripherals.GPIO5;
+
+
+    let mut spi = Spi::new(
+        peripherals.SPI2, // Is this the right one?
+        esp_hal::spi::master::Config::default().with_frequency(Rate::from_khz(100)),
+    ).unwrap()
+    .with_sck(sclk)
+    .with_mosi(mosi)
+    .with_miso(miso)
+    .with_cs(cs);
+
+    // Read DEVID_AD (0x00)
+    for i in 0..2 {
+        let mut buf = [0x00 | 0x80, 0];
+        spi.transfer(&mut buf).unwrap(); // TODO: Error handling
+        // TODO: Seems to return 0x00, while should return 0xAD
+        println!("DEVID_AD = {:?}", buf);
+    }
 
     // Spawn tasks
 
