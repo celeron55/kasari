@@ -224,7 +224,6 @@ async fn main(spawner: Spawner) {
     let mosi = peripherals.GPIO23;
     let cs = peripherals.GPIO5;
 
-
     let mut spi = Spi::new(
         peripherals.SPI2, // Is this the right one?
         esp_hal::spi::master::Config::default().with_frequency(Rate::from_khz(100)),
@@ -234,12 +233,29 @@ async fn main(spawner: Spawner) {
     .with_miso(miso)
     .with_cs(cs);
 
-    // Read DEVID_AD (0x00)
-    for i in 0..2 {
-        let mut buf = [0x00 | 0x80, 0];
+    // Read DEVID_AD
+    let mut buf = [(0x00 << 1) | 1, 0]; // DEVID_AD (should read 0xad)
+    spi.transfer(&mut buf).unwrap(); // TODO: Error handling
+    println!("DEVID_AD = {:#02x} (should be 0xad)", buf[1]);
+
+    // Turn on full bandwidth measurement mode, enable lpf, disable hpf
+    let mut buf = [(0x3f << 1) | 0, 0b00010111]; // POWER_CTL
+    spi.transfer(&mut buf).unwrap(); // TODO: Error handling
+
+    // TODO: Do this in a task
+    // Read XDATA...ZDATA
+    loop {
+        let mut buf = [(0x08 << 1) | 1, 0, 0, 0, 0, 0, 0]; // XDATA
         spi.transfer(&mut buf).unwrap(); // TODO: Error handling
-        // TODO: Seems to return 0x00, while should return 0xAD
-        println!("DEVID_AD = {:?}", buf);
+        let x_raw = (((buf[1] as i16) << 8) | buf[2] as i16) >> 4;
+        let y_raw = (((buf[3] as i16) << 8) | buf[4] as i16) >> 4;
+        let z_raw = (((buf[5] as i16) << 8) | buf[6] as i16) >> 4;
+        let x_g = x_raw as f32 * 0.2;
+        let y_g = y_raw as f32 * 0.2;
+        let z_g = z_raw as f32 * 0.2;
+        // We should be getting negative Y in the spinning robot
+        println!("x ={: >5.1}, y ={: >5.1}, z ={: >5.1}", x_g, y_g, z_g);
+        Timer::after_millis(100).await;
     }
 
     // Spawn tasks
