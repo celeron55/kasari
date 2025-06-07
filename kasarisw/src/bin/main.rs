@@ -1,18 +1,27 @@
 #![no_std]
 #![no_main]
 
+use core::cell::RefCell;
+use core::cmp::min;
+use core::sync::atomic::AtomicI32;
+use critical_section::Mutex;
 use embassy_executor::Spawner;
-use embassy_sync::{blocking_mutex::raw::NoopRawMutex, signal::Signal};
+use embassy_sync::{
+    blocking_mutex::raw::CriticalSectionRawMutex, blocking_mutex::raw::NoopRawMutex, signal::Signal,
+};
 use embassy_time::{Duration, Timer};
 use esp_alloc as _;
 use esp_backtrace as _;
 use esp_hal::{
+    interrupt::Priority,
     clock::Clocks,
-    gpio::{AnyPin, Level, Output, OutputConfig, Pin},
+    gpio::{AnyPin, Input, InputConfig, Level, Output, OutputConfig, Pin, Pull},
+    handler,
     ledc::{
         channel as ledc_channel, channel::ChannelIFace, timer as ledc_timer, timer::TimerIFace,
         Ledc,
     },
+    rmt::{PulseCode, Rmt, RxChannelConfig, RxTransaction, RxChannelAsync, RxChannelCreatorAsync},
     spi::master::Spi,
     time::Rate,
     timer::timg::TimerGroup,
@@ -24,11 +33,15 @@ use esp_println::println;
 use ringbuffer::{ConstGenericRingBuffer, RingBuffer};
 use static_cell::StaticCell; // For allocator
 
+// LIDAR constants
 const PACKET_SIZE: usize = 22;
 const HEAD_BYTE: u8 = 0xFA;
-
-// Assume READ_BUF_SIZE is defined elsewhere (e.g., 64)
 const READ_BUF_SIZE: usize = 64;
+
+// RC receiver PWM input globals
+// Signal to communicate pulse widths for each channel
+static RC_RECEIVER_SIGNALS: [Signal<CriticalSectionRawMutex, f32>; 3] =
+    [Signal::new(), Signal::new(), Signal::new()];
 
 #[embassy_executor::task]
 async fn writer(mut tx: UartTx<'static, Async>, signal: &'static Signal<NoopRawMutex, usize>) {
@@ -224,12 +237,50 @@ async fn accelerometer_task(mut spi: Spi<'static, esp_hal::Blocking>) {
     }
 }
 
+#[embassy_executor::task]
+async fn rmt_task(mut ch0: esp_hal::rmt::Channel<esp_hal::Async, 0>) {
+    let mut buffer0: [u32; 1] = [PulseCode::empty(); 1];
+
+    loop {
+        for x in buffer0.iter_mut() {
+            x.reset();
+        }
+        let i = 0;
+        let result = ch0.receive(&mut buffer0).await;
+        esp_println::println!("RMT Results:");
+        match result {
+            Ok(()) => {
+                for entry in buffer0.iter().take_while(|e| e.length1() != 0) {
+                    /*esp_println::println!("{:?}, {:?}, {:?}, {:?}",
+                            entry.level1(), entry.length1(),
+                            entry.level2(), entry.length2());*/
+
+                    let length_raw = if entry.level1() == Level::High && entry.length1() > 10 {
+                        entry.length1()
+                    } else if entry.level2() == Level::High && entry.length2() > 10 {
+                        entry.length2()
+                    } else {
+                        0
+                    };
+
+                    if length_raw > 10 {
+                        esp_println::println!("* {:?}", length_raw);
+                        let pulse_width_us = length_raw as f32;
+                        RC_RECEIVER_SIGNALS[i].signal(pulse_width_us);
+                    }
+                }
+            }
+            Err((err)) => {
+                esp_println::println!("Channel {} error: {:?}", i, err);
+            }
+        }
+    }
+}
+
 #[esp_hal_embassy::main]
 async fn main(spawner: Spawner) {
     esp_println::println!("Init!");
     let peripherals = esp_hal::init(esp_hal::Config::default());
-    //let system = SystemControl::new(peripherals.SYSTEM);
-    //let _clocks = ClockConfig::new().freeze(&system);
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     esp_hal_embassy::init(timg0.timer0);
@@ -237,11 +288,12 @@ async fn main(spawner: Spawner) {
     // GPIO
 
     let encoder_emulation_output_pinmap = peripherals.GPIO13.degrade();
+    let rc_receiver_ch1_pinmap = peripherals.GPIO34;
 
     // PWM output to ESCs
 
-    let mut gpio26 = Output::new(peripherals.GPIO26, Level::Low, OutputConfig::default());
-    let mut gpio27 = Output::new(peripherals.GPIO27, Level::Low, OutputConfig::default());
+    let mut esc_right_pin = Output::new(peripherals.GPIO26, Level::Low, OutputConfig::default());
+    let mut esc_left_pin = Output::new(peripherals.GPIO27, Level::Low, OutputConfig::default());
 
     let mut ledc = Ledc::new(peripherals.LEDC);
     ledc.set_global_slow_clock(esp_hal::ledc::LSGlobalClkSource::APBClk);
@@ -266,7 +318,7 @@ async fn main(spawner: Spawner) {
 
     // Configure PWM channels for GPIO26 and GPIO27
     let mut channel0: esp_hal::ledc::channel::Channel<'_, esp_hal::ledc::LowSpeed> =
-        ledc.channel(ledc_channel::Number::Channel0, gpio26);
+        ledc.channel(ledc_channel::Number::Channel0, esc_right_pin);
     channel0
         .configure(ledc_channel::config::Config {
             timer: &lstimer0,
@@ -276,7 +328,7 @@ async fn main(spawner: Spawner) {
         .unwrap();
 
     let mut channel1: esp_hal::ledc::channel::Channel<'_, esp_hal::ledc::LowSpeed> =
-        ledc.channel(ledc_channel::Number::Channel1, gpio27);
+        ledc.channel(ledc_channel::Number::Channel1, esc_left_pin);
     channel1
         .configure(ledc_channel::config::Config {
             timer: &lstimer1,
@@ -323,6 +375,27 @@ async fn main(spawner: Spawner) {
     .with_miso(miso)
     .with_cs(cs);
 
+    // RC receiver PWM input
+
+    let mut rmt = Rmt::new(peripherals.RMT, Rate::from_mhz(80)).unwrap();
+    let mut rmt = rmt.into_async();
+
+    let rx_config = RxChannelConfig::default()
+        //.with_clk_divider(8) // 10 MHz (100 ns resolution)
+        //.with_idle_threshold(30_000) // 3 ms in ticks (3 ms * 10 MHz)
+        //.with_filter_threshold(0); // No filter for high precision
+        .with_clk_divider(80)
+        .with_idle_threshold(3000)
+        .with_filter_threshold(100)
+        .with_carrier_modulation(false);
+
+    let mut rmt_ch0 = rmt
+        .channel0
+        .configure(rc_receiver_ch1_pinmap, rx_config.clone())
+        .unwrap();
+    //let mut rmt_ch1 = rmt.channel1.configure(gpio35, rx_config.clone()).unwrap();
+    //let mut rmt_ch2 = rmt.channel2.configure(gpio36, rx_config).unwrap();
+
     // Spawn tasks
 
     static SIGNAL: StaticCell<Signal<NoopRawMutex, usize>> = StaticCell::new();
@@ -334,4 +407,5 @@ async fn main(spawner: Spawner) {
         .spawn(encoder_emulation_task(encoder_emulation_output_pinmap))
         .ok();
     spawner.spawn(accelerometer_task(spi)).ok();
+    spawner.spawn(rmt_task(rmt_ch0)).ok();
 }

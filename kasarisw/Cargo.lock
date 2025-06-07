@@ -645,6 +645,7 @@ version = "0.1.0"
 dependencies = [
  "critical-section",
  "embassy-executor",
+ "embassy-futures",
  "embassy-sync 0.7.0",
  "embassy-time",
  "embedded-io-async",
