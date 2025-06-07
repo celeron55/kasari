@@ -2,8 +2,7 @@
 #![no_main]
 
 use core::cell::RefCell;
-use core::cmp::min;
-use core::sync::atomic::AtomicI32;
+use core::ops::DerefMut;
 use critical_section::Mutex;
 use embassy_executor::Spawner;
 use embassy_sync::{
@@ -13,15 +12,12 @@ use embassy_time::{Duration, Timer};
 use esp_alloc as _;
 use esp_backtrace as _;
 use esp_hal::{
-    interrupt::Priority,
-    clock::Clocks,
-    gpio::{AnyPin, Input, InputConfig, Level, Output, OutputConfig, Pin, Pull},
-    handler,
+    gpio::{AnyPin, Level, Output, OutputConfig, Pin},
     ledc::{
         channel as ledc_channel, channel::ChannelIFace, timer as ledc_timer, timer::TimerIFace,
         Ledc,
     },
-    rmt::{PulseCode, Rmt, RxChannelConfig, RxTransaction, RxChannelAsync, RxChannelCreatorAsync},
+    rmt::{PulseCode, Rmt, RxChannelConfig, RxChannelAsync, RxChannelCreatorAsync},
     spi::master::Spi,
     time::Rate,
     timer::timg::TimerGroup,
@@ -38,13 +34,12 @@ const PACKET_SIZE: usize = 22;
 const HEAD_BYTE: u8 = 0xFA;
 const READ_BUF_SIZE: usize = 64;
 
-// RC receiver PWM input globals
-// Signal to communicate pulse widths for each channel
-static RC_RECEIVER_SIGNALS: [Signal<CriticalSectionRawMutex, f32>; 3] =
-    [Signal::new(), Signal::new(), Signal::new()];
+// Global event queue to be fed to main logic
+static GLOBAL_EVENT_QUEUE: Mutex<RefCell<Option<ConstGenericRingBuffer<kasari::InputEvent, 300>>>> =
+        Mutex::new(RefCell::new(None));
 
 #[embassy_executor::task]
-async fn writer(mut tx: UartTx<'static, Async>, signal: &'static Signal<NoopRawMutex, usize>) {
+async fn lidar_writer(mut tx: UartTx<'static, Async>, signal: &'static Signal<NoopRawMutex, usize>) {
     use core::fmt::Write;
     embedded_io_async::Write::write(&mut tx, b"Hello async serial\r\n")
         .await
@@ -59,7 +54,7 @@ async fn writer(mut tx: UartTx<'static, Async>, signal: &'static Signal<NoopRawM
 }
 
 #[embassy_executor::task]
-async fn reader(mut rx: UartRx<'static, Async>, signal: &'static Signal<NoopRawMutex, usize>) {
+async fn lidar_reader(mut rx: UartRx<'static, Async>, signal: &'static Signal<NoopRawMutex, usize>) {
     const MAX_BUFFER_SIZE: usize = 2 * READ_BUF_SIZE + 16;
     let mut rbuf: [u8; MAX_BUFFER_SIZE] = [0u8; MAX_BUFFER_SIZE];
     let mut offset = 0;
@@ -99,8 +94,22 @@ async fn reader(mut rx: UartRx<'static, Async>, signal: &'static Signal<NoopRawM
                         packet[i] = ring_buf.get(i).copied().unwrap_or(0);
                     }
 
-                    // Parse and print packet
+                    // Parse, queue and print packet
                     if let Some(parsed) = parse_packet(&packet) {
+                        critical_section::with(|cs| {
+                            if let Some(ref mut event_queue) = GLOBAL_EVENT_QUEUE.borrow(cs).borrow_mut().deref_mut() {
+                                let timestamp = embassy_time::Instant::now().as_ticks();
+                                let event = kasari::InputEvent::Lidar(
+                                    timestamp,
+                                    parsed.distances[0] as f32,
+                                    parsed.distances[1] as f32,
+                                    parsed.distances[2] as f32,
+                                    parsed.distances[3] as f32,
+                                );
+                                event_queue.push(event);
+                            }
+                        });
+
                         log_i += 1;
                         if log_i % 20 == 1 {
                             println!(
@@ -130,8 +139,6 @@ async fn reader(mut rx: UartRx<'static, Async>, signal: &'static Signal<NoopRawM
 
 // Parsed packet data
 struct ParsedPacket {
-    angle: u16,          // degrees (0–360)
-    speed: u16,          // RPM
     distances: [u16; 4], // mm
 }
 
@@ -148,8 +155,8 @@ fn parse_packet(packet: &[u8]) -> Option<ParsedPacket> {
     }
 
     // Speed: bytes 2 (LSB), 3 (MSB), (MSB << 8) | LSB / 64
-    let speed = ((packet[3] as u16) << 8) | (packet[2] as u16);
-    let speed = speed / 64;
+    //let speed = ((packet[3] as u16) << 8) | (packet[2] as u16);
+    //let speed = speed / 64;
 
     // Distances: bytes 4–19, 4 sets of (LSB, MSB & 0x3F)
     let mut distances = [0u16; 4];
@@ -166,8 +173,6 @@ fn parse_packet(packet: &[u8]) -> Option<ParsedPacket> {
     }
 
     Some(ParsedPacket {
-        angle,
-        speed,
         distances,
     })
 }
@@ -218,7 +223,7 @@ async fn accelerometer_task(mut spi: Spi<'static, esp_hal::Blocking>) {
     spi.transfer(&mut buf).unwrap(); // TODO: Error handling
 
     // Read XDATA...ZDATA
-    let mut loop_i = 0;
+    //let mut loop_i = 0;
     loop {
         let mut buf = [(0x08 << 1) | 1, 0, 0, 0, 0, 0, 0]; // XDATA
         spi.transfer(&mut buf).unwrap(); // TODO: Error handling
@@ -228,11 +233,24 @@ async fn accelerometer_task(mut spi: Spi<'static, esp_hal::Blocking>) {
         let x_g = x_raw as f32 * 0.2;
         let y_g = y_raw as f32 * 0.2;
         let z_g = z_raw as f32 * 0.2;
+
+        // Produce an event to the global event queue
+        critical_section::with(|cs| {
+            if let Some(ref mut event_queue) = GLOBAL_EVENT_QUEUE.borrow(cs).borrow_mut().deref_mut() {
+                let timestamp = embassy_time::Instant::now().as_ticks();
+                let event = kasari::InputEvent::Accelerometer(
+                    timestamp,
+                    -y_g, // Positive proportional value when the robot spins
+                );
+                event_queue.push(event);
+            }
+        });
+
         // We should be getting negative Y in the spinning robot
-        if loop_i % 100 == 0 {
+        /*if loop_i % 100 == 0 {
             println!("x ={: >5.1}, y ={: >5.1}, z ={: >5.1}", x_g, y_g, z_g);
         }
-        loop_i += 1;
+        loop_i += 1;*/
         Timer::after_millis(10).await;
     }
 }
@@ -247,7 +265,8 @@ async fn rmt_task(mut ch0: esp_hal::rmt::Channel<esp_hal::Async, 0>) {
         }
         let i = 0;
         let result = ch0.receive(&mut buffer0).await;
-        esp_println::println!("RMT Results:");
+        let mut ch0_final_result: Option<f32> = None;
+        //esp_println::println!("RMT Results:");
         match result {
             Ok(()) => {
                 for entry in buffer0.iter().take_while(|e| e.length1() != 0) {
@@ -264,15 +283,78 @@ async fn rmt_task(mut ch0: esp_hal::rmt::Channel<esp_hal::Async, 0>) {
                     };
 
                     if length_raw > 10 {
-                        esp_println::println!("* {:?}", length_raw);
+                        //esp_println::println!("* {:?}", length_raw);
                         let pulse_width_us = length_raw as f32;
-                        RC_RECEIVER_SIGNALS[i].signal(pulse_width_us);
+                        ch0_final_result = Some(pulse_width_us);
                     }
                 }
             }
-            Err((err)) => {
-                esp_println::println!("Channel {} error: {:?}", i, err);
+            Err(_err) => {
+                //esp_println::println!("Channel {} error: {:?}", i, err);
             }
+        }
+        if ch0_final_result.is_none() {
+            //esp_println::println!("Channel {} no valid result", i);
+        }
+
+        // Produce an event to the global event queue
+        critical_section::with(|cs| {
+            if let Some(ref mut event_queue) = GLOBAL_EVENT_QUEUE.borrow(cs).borrow_mut().deref_mut() {
+                let timestamp = embassy_time::Instant::now().as_ticks();
+                let event = kasari::InputEvent::Receiver(
+                    timestamp,
+                    0,
+                    ch0_final_result,
+                );
+                event_queue.push(event);
+            }
+        });
+    }
+}
+
+mod kasari {
+    pub enum InputEvent {
+        Lidar(u64, f32, f32, f32, f32), // timestamp, distance samples (mm)
+        Accelerometer(u64, f32), // timestamp, acceleration (G)
+        Receiver(u64, u8, Option<f32>), // timestamp, channel (0=throttle), pulse length (us)
+    }
+
+    pub struct MotorControlPlan {
+        throttle: f32, // 0.0...1.0
+        modulation_amplitude: f32, // -0.0....1.0
+        modulation_phase: f32, // Some kind of an angle
+    }
+
+    pub struct MainLogic {
+        pub motor_control_plan: Option<MotorControlPlan>,
+
+        acceleration: f32, // Acceleration to the normal direction re. rotation
+    }
+
+    impl MainLogic {
+        pub fn new() -> Self {
+            Self {
+                motor_control_plan: None,
+                acceleration: 0.0,
+            }
+        }
+
+        pub fn feed_event(&mut self, event: InputEvent) {
+            match event {
+                InputEvent::Lidar(timestamp, d1, d2, d3, d4) => {
+                    //esp_println::println!("Lidar event");
+                },
+                InputEvent::Accelerometer(timestamp, acceleration) => {
+                    //esp_println::println!("Accelerometer event");
+                    self.acceleration = acceleration;
+                }
+                InputEvent::Receiver(timestamp, ch, pulse_length) => {
+                    esp_println::println!("Receiver event: ch{:?}: {:?}", ch, pulse_length);
+                }
+            }
+        }
+
+        pub fn step(&mut self) {
         }
     }
 }
@@ -292,8 +374,8 @@ async fn main(spawner: Spawner) {
 
     // PWM output to ESCs
 
-    let mut esc_right_pin = Output::new(peripherals.GPIO26, Level::Low, OutputConfig::default());
-    let mut esc_left_pin = Output::new(peripherals.GPIO27, Level::Low, OutputConfig::default());
+    let esc_right_pin = Output::new(peripherals.GPIO26, Level::Low, OutputConfig::default());
+    let esc_left_pin = Output::new(peripherals.GPIO27, Level::Low, OutputConfig::default());
 
     let mut ledc = Ledc::new(peripherals.LEDC);
     ledc.set_global_slow_clock(esp_hal::ledc::LSGlobalClkSource::APBClk);
@@ -365,7 +447,7 @@ async fn main(spawner: Spawner) {
     let mosi = peripherals.GPIO23;
     let cs = peripherals.GPIO5;
 
-    let mut spi = Spi::new(
+    let spi = Spi::new(
         peripherals.SPI2, // Is this the right one?
         esp_hal::spi::master::Config::default().with_frequency(Rate::from_khz(100)),
     )
@@ -377,19 +459,16 @@ async fn main(spawner: Spawner) {
 
     // RC receiver PWM input
 
-    let mut rmt = Rmt::new(peripherals.RMT, Rate::from_mhz(80)).unwrap();
-    let mut rmt = rmt.into_async();
+    let rmt = Rmt::new(peripherals.RMT, Rate::from_mhz(80)).unwrap();
+    let rmt = rmt.into_async();
 
     let rx_config = RxChannelConfig::default()
-        //.with_clk_divider(8) // 10 MHz (100 ns resolution)
-        //.with_idle_threshold(30_000) // 3 ms in ticks (3 ms * 10 MHz)
-        //.with_filter_threshold(0); // No filter for high precision
         .with_clk_divider(80)
         .with_idle_threshold(3000)
         .with_filter_threshold(100)
         .with_carrier_modulation(false);
 
-    let mut rmt_ch0 = rmt
+    let rmt_ch0 = rmt
         .channel0
         .configure(rc_receiver_ch1_pinmap, rx_config.clone())
         .unwrap();
@@ -401,11 +480,37 @@ async fn main(spawner: Spawner) {
     static SIGNAL: StaticCell<Signal<NoopRawMutex, usize>> = StaticCell::new();
     let signal = &*SIGNAL.init(Signal::new());
 
-    spawner.spawn(reader(rx, &signal)).ok();
-    spawner.spawn(writer(tx, &signal)).ok();
+    spawner.spawn(lidar_reader(rx, &signal)).ok();
+    spawner.spawn(lidar_writer(tx, &signal)).ok();
     spawner
         .spawn(encoder_emulation_task(encoder_emulation_output_pinmap))
         .ok();
     spawner.spawn(accelerometer_task(spi)).ok();
     spawner.spawn(rmt_task(rmt_ch0)).ok();
+
+    // Main loop
+
+    let mut logic = kasari::MainLogic::new();
+
+    loop {
+        //esp_println::println!("Main loop");
+
+        // Get the event queue, swapping an empty one in place
+        let event_queue = critical_section::with(|cs| {
+            GLOBAL_EVENT_QUEUE.borrow(cs).replace(Some(ConstGenericRingBuffer::new()))
+        });
+
+        // Feed the entire event queue one at a time
+        if let Some(mut event_queue) = event_queue {
+            while let Some(event) = event_queue.dequeue() {
+                logic.feed_event(event);
+            }
+        }
+
+        logic.step();
+
+        // TODO: Implement motor control in a task and send logic.motor_control_plan there
+
+        Timer::after_millis(20).await;
+    }
 }
