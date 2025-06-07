@@ -7,7 +7,12 @@ use embassy_time::{Duration, Timer};
 use esp_alloc as _;
 use esp_backtrace as _;
 use esp_hal::{
+    clock::Clocks,
     gpio::{AnyPin, Level, Output, OutputConfig, Pin},
+    ledc::{
+        channel as ledc_channel, channel::ChannelIFace, timer as ledc_timer, timer::TimerIFace,
+        Ledc,
+    },
     spi::master::Spi,
     time::Rate,
     timer::timg::TimerGroup,
@@ -223,6 +228,8 @@ async fn accelerometer_task(mut spi: Spi<'static, esp_hal::Blocking>) {
 async fn main(spawner: Spawner) {
     esp_println::println!("Init!");
     let peripherals = esp_hal::init(esp_hal::Config::default());
+    //let system = SystemControl::new(peripherals.SYSTEM);
+    //let _clocks = ClockConfig::new().freeze(&system);
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     esp_hal_embassy::init(timg0.timer0);
@@ -230,6 +237,57 @@ async fn main(spawner: Spawner) {
     // GPIO
 
     let encoder_emulation_output_pinmap = peripherals.GPIO13.degrade();
+
+    // PWM output to ESCs
+
+    let mut gpio26 = Output::new(peripherals.GPIO26, Level::Low, OutputConfig::default());
+    let mut gpio27 = Output::new(peripherals.GPIO27, Level::Low, OutputConfig::default());
+
+    let mut ledc = Ledc::new(peripherals.LEDC);
+    ledc.set_global_slow_clock(esp_hal::ledc::LSGlobalClkSource::APBClk);
+
+    // Configure PWM timer
+    let mut lstimer0 = ledc.timer::<esp_hal::ledc::LowSpeed>(ledc_timer::Number::Timer0);
+    lstimer0
+        .configure(ledc_timer::config::Config {
+            duty: ledc_timer::config::Duty::Duty5Bit,
+            clock_source: ledc_timer::LSClockSource::APBClk,
+            frequency: Rate::from_hz(500),
+        })
+        .unwrap();
+    let mut lstimer1 = ledc.timer::<esp_hal::ledc::LowSpeed>(ledc_timer::Number::Timer1);
+    lstimer1
+        .configure(ledc_timer::config::Config {
+            duty: ledc_timer::config::Duty::Duty5Bit,
+            clock_source: ledc_timer::LSClockSource::APBClk,
+            frequency: Rate::from_hz(500),
+        })
+        .unwrap();
+
+    // Configure PWM channels for GPIO26 and GPIO27
+    let mut channel0: esp_hal::ledc::channel::Channel<'_, esp_hal::ledc::LowSpeed> =
+        ledc.channel(ledc_channel::Number::Channel0, gpio26);
+    channel0
+        .configure(ledc_channel::config::Config {
+            timer: &lstimer0,
+            duty_pct: 10,
+            pin_config: ledc_channel::config::PinConfig::PushPull,
+        })
+        .unwrap();
+
+    let mut channel1: esp_hal::ledc::channel::Channel<'_, esp_hal::ledc::LowSpeed> =
+        ledc.channel(ledc_channel::Number::Channel1, gpio27);
+    channel1
+        .configure(ledc_channel::config::Config {
+            timer: &lstimer1,
+            duty_pct: 10,
+            pin_config: ledc_channel::config::PinConfig::PushPull,
+        })
+        .unwrap();
+
+    // Set initial duty cycles (50% for both channels)
+    channel0.set_duty(25);
+    channel1.set_duty(75);
 
     // UART2
 
