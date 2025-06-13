@@ -359,6 +359,15 @@ mod kasari {
     }
 }
 
+const PWM_HZ: f32 = 400.0;
+
+// ESC target speed (bidirectional) to servo signal PWM duty cycle percent
+fn target_speed_to_pwm_duty(speed_percent: f32) -> u8 {
+    let center_pwm = 0.00149 * PWM_HZ;
+    let pwm_amplitude = 0.000350 * PWM_HZ;
+    (center_pwm * 100.0 + pwm_amplitude * speed_percent).min(100.0).max(-100.0) as u8
+}
+
 #[esp_hal_embassy::main]
 async fn main(spawner: Spawner) {
     esp_println::println!("Init!");
@@ -386,7 +395,7 @@ async fn main(spawner: Spawner) {
         .configure(ledc_timer::config::Config {
             duty: ledc_timer::config::Duty::Duty5Bit,
             clock_source: ledc_timer::LSClockSource::APBClk,
-            frequency: Rate::from_hz(500),
+            frequency: Rate::from_hz(PWM_HZ as u32),
         })
         .unwrap();
     let mut lstimer1 = ledc.timer::<esp_hal::ledc::LowSpeed>(ledc_timer::Number::Timer1);
@@ -394,7 +403,7 @@ async fn main(spawner: Spawner) {
         .configure(ledc_timer::config::Config {
             duty: ledc_timer::config::Duty::Duty5Bit,
             clock_source: ledc_timer::LSClockSource::APBClk,
-            frequency: Rate::from_hz(500),
+            frequency: Rate::from_hz(PWM_HZ as u32),
         })
         .unwrap();
 
@@ -419,9 +428,9 @@ async fn main(spawner: Spawner) {
         })
         .unwrap();
 
-    // Set initial duty cycles (50% for both channels)
-    channel0.set_duty(25);
-    channel1.set_duty(75);
+    // Set initial PWM output to 0 (=disable)
+    channel0.set_duty(0);
+    channel1.set_duty(0);
 
     // UART2
 
@@ -503,6 +512,28 @@ async fn main(spawner: Spawner) {
         // Feed the entire event queue one at a time
         if let Some(mut event_queue) = event_queue {
             while let Some(event) = event_queue.dequeue() {
+
+                // TODO: Remove: Direct ESC control
+                if let kasari::InputEvent::Receiver(timestamp, ch, pulse_length) = event {
+                    //esp_println::println!("Receiver event (main loop): ch{:?}: {:?}", ch, pulse_length);
+                    match pulse_length {
+                        Some(pulse_length) => {
+                            let target_speed_percent = (pulse_length - 1500.0) * 0.2;
+                            esp_println::println!("pulse_length -> target_speed_percent: {:?} -> {:?}", pulse_length, target_speed_percent);
+                            let mut duty = target_speed_to_pwm_duty(target_speed_percent);
+                            esp_println::println!("Setting duty cycle: {:?}", duty);
+                            channel0.set_duty(duty);
+                            channel1.set_duty(duty);
+                        }
+                        None => {
+                            //channel0.set_duty(75);
+                            //channel1.set_duty(75);
+                            channel0.set_duty(0);
+                            channel1.set_duty(0);
+                        }
+                    }
+                }
+
                 logic.feed_event(event);
             }
         }
