@@ -15,9 +15,9 @@ use esp_hal::{
     gpio::{AnyPin, Level, Output, OutputConfig, Pin},
     ledc::{
         channel as ledc_channel, channel::ChannelIFace, timer as ledc_timer, timer::TimerIFace,
-        Ledc,
+        Ledc, channel::ChannelHW
     },
-    rmt::{PulseCode, Rmt, RxChannelConfig, RxChannelAsync, RxChannelCreatorAsync},
+    rmt::{PulseCode, Rmt, RxChannelAsync, RxChannelConfig, RxChannelCreatorAsync},
     spi::master::Spi,
     time::Rate,
     timer::timg::TimerGroup,
@@ -36,10 +36,13 @@ const READ_BUF_SIZE: usize = 64;
 
 // Global event queue to be fed to main logic
 static GLOBAL_EVENT_QUEUE: Mutex<RefCell<Option<ConstGenericRingBuffer<kasari::InputEvent, 300>>>> =
-        Mutex::new(RefCell::new(None));
+    Mutex::new(RefCell::new(None));
 
 #[embassy_executor::task]
-async fn lidar_writer(mut tx: UartTx<'static, Async>, signal: &'static Signal<NoopRawMutex, usize>) {
+async fn lidar_writer(
+    mut tx: UartTx<'static, Async>,
+    signal: &'static Signal<NoopRawMutex, usize>,
+) {
     use core::fmt::Write;
     embedded_io_async::Write::write(&mut tx, b"Hello async serial\r\n")
         .await
@@ -54,7 +57,10 @@ async fn lidar_writer(mut tx: UartTx<'static, Async>, signal: &'static Signal<No
 }
 
 #[embassy_executor::task]
-async fn lidar_reader(mut rx: UartRx<'static, Async>, signal: &'static Signal<NoopRawMutex, usize>) {
+async fn lidar_reader(
+    mut rx: UartRx<'static, Async>,
+    signal: &'static Signal<NoopRawMutex, usize>,
+) {
     const MAX_BUFFER_SIZE: usize = 2 * READ_BUF_SIZE + 16;
     let mut rbuf: [u8; MAX_BUFFER_SIZE] = [0u8; MAX_BUFFER_SIZE];
     let mut offset = 0;
@@ -97,7 +103,9 @@ async fn lidar_reader(mut rx: UartRx<'static, Async>, signal: &'static Signal<No
                     // Parse, queue and print packet
                     if let Some(parsed) = parse_packet(&packet) {
                         critical_section::with(|cs| {
-                            if let Some(ref mut event_queue) = GLOBAL_EVENT_QUEUE.borrow(cs).borrow_mut().deref_mut() {
+                            if let Some(ref mut event_queue) =
+                                GLOBAL_EVENT_QUEUE.borrow(cs).borrow_mut().deref_mut()
+                            {
                                 let timestamp = embassy_time::Instant::now().as_ticks();
                                 let event = kasari::InputEvent::Lidar(
                                     timestamp,
@@ -172,9 +180,7 @@ fn parse_packet(packet: &[u8]) -> Option<ParsedPacket> {
         return None;
     }
 
-    Some(ParsedPacket {
-        distances,
-    })
+    Some(ParsedPacket { distances })
 }
 
 // Compute checksum for packet (excluding last 2 bytes)
@@ -236,11 +242,12 @@ async fn accelerometer_task(mut spi: Spi<'static, esp_hal::Blocking>) {
 
         // Produce an event to the global event queue
         critical_section::with(|cs| {
-            if let Some(ref mut event_queue) = GLOBAL_EVENT_QUEUE.borrow(cs).borrow_mut().deref_mut() {
+            if let Some(ref mut event_queue) =
+                GLOBAL_EVENT_QUEUE.borrow(cs).borrow_mut().deref_mut()
+            {
                 let timestamp = embassy_time::Instant::now().as_ticks();
                 let event = kasari::InputEvent::Accelerometer(
-                    timestamp,
-                    -y_g, // Positive proportional value when the robot spins
+                    timestamp, -y_g, // Positive proportional value when the robot spins
                 );
                 event_queue.push(event);
             }
@@ -271,8 +278,8 @@ async fn rmt_task(mut ch0: esp_hal::rmt::Channel<esp_hal::Async, 0>) {
             Ok(()) => {
                 for entry in buffer0.iter().take_while(|e| e.length1() != 0) {
                     /*esp_println::println!("{:?}, {:?}, {:?}, {:?}",
-                            entry.level1(), entry.length1(),
-                            entry.level2(), entry.length2());*/
+                    entry.level1(), entry.length1(),
+                    entry.level2(), entry.length2());*/
 
                     let length_raw = if entry.level1() == Level::High && entry.length1() > 10 {
                         entry.length1()
@@ -299,13 +306,11 @@ async fn rmt_task(mut ch0: esp_hal::rmt::Channel<esp_hal::Async, 0>) {
 
         // Produce an event to the global event queue
         critical_section::with(|cs| {
-            if let Some(ref mut event_queue) = GLOBAL_EVENT_QUEUE.borrow(cs).borrow_mut().deref_mut() {
+            if let Some(ref mut event_queue) =
+                GLOBAL_EVENT_QUEUE.borrow(cs).borrow_mut().deref_mut()
+            {
                 let timestamp = embassy_time::Instant::now().as_ticks();
-                let event = kasari::InputEvent::Receiver(
-                    timestamp,
-                    0,
-                    ch0_final_result,
-                );
+                let event = kasari::InputEvent::Receiver(timestamp, 0, ch0_final_result);
                 event_queue.push(event);
             }
         });
@@ -315,14 +320,14 @@ async fn rmt_task(mut ch0: esp_hal::rmt::Channel<esp_hal::Async, 0>) {
 mod kasari {
     pub enum InputEvent {
         Lidar(u64, f32, f32, f32, f32), // timestamp, distance samples (mm)
-        Accelerometer(u64, f32), // timestamp, acceleration (G)
+        Accelerometer(u64, f32),        // timestamp, acceleration (G)
         Receiver(u64, u8, Option<f32>), // timestamp, channel (0=throttle), pulse length (us)
     }
 
     pub struct MotorControlPlan {
-        throttle: f32, // 0.0...1.0
+        throttle: f32,             // 0.0...1.0
         modulation_amplitude: f32, // -0.0....1.0
-        modulation_phase: f32, // Some kind of an angle
+        modulation_phase: f32,     // Some kind of an angle
     }
 
     pub struct MainLogic {
@@ -343,7 +348,7 @@ mod kasari {
             match event {
                 InputEvent::Lidar(timestamp, d1, d2, d3, d4) => {
                     //esp_println::println!("Lidar event");
-                },
+                }
                 InputEvent::Accelerometer(timestamp, acceleration) => {
                     //esp_println::println!("Accelerometer event");
                     self.acceleration = acceleration;
@@ -354,18 +359,20 @@ mod kasari {
             }
         }
 
-        pub fn step(&mut self) {
-        }
+        pub fn step(&mut self) {}
     }
 }
 
 const PWM_HZ: f32 = 400.0;
 
 // ESC target speed (bidirectional) to servo signal PWM duty cycle percent
-fn target_speed_to_pwm_duty(speed_percent: f32) -> u8 {
+fn target_speed_to_pwm_duty(speed_percent: f32, duty_range: u32) -> u32 {
     let center_pwm = 0.00149 * PWM_HZ;
     let pwm_amplitude = 0.000350 * PWM_HZ;
-    (center_pwm * 100.0 + pwm_amplitude * speed_percent).min(100.0).max(-100.0) as u8
+    let duty_percent = (center_pwm * 100.0 + pwm_amplitude * speed_percent)
+        .min(100.0)
+        .max(-100.0);
+    (duty_range * duty_percent as u32) / 100
 }
 
 #[esp_hal_embassy::main]
@@ -393,7 +400,7 @@ async fn main(spawner: Spawner) {
     let mut lstimer0 = ledc.timer::<esp_hal::ledc::LowSpeed>(ledc_timer::Number::Timer0);
     lstimer0
         .configure(ledc_timer::config::Config {
-            duty: ledc_timer::config::Duty::Duty5Bit,
+            duty: ledc_timer::config::Duty::Duty8Bit,
             clock_source: ledc_timer::LSClockSource::APBClk,
             frequency: Rate::from_hz(PWM_HZ as u32),
         })
@@ -401,7 +408,7 @@ async fn main(spawner: Spawner) {
     let mut lstimer1 = ledc.timer::<esp_hal::ledc::LowSpeed>(ledc_timer::Number::Timer1);
     lstimer1
         .configure(ledc_timer::config::Config {
-            duty: ledc_timer::config::Duty::Duty5Bit,
+            duty: ledc_timer::config::Duty::Duty8Bit,
             clock_source: ledc_timer::LSClockSource::APBClk,
             frequency: Rate::from_hz(PWM_HZ as u32),
         })
@@ -506,28 +513,36 @@ async fn main(spawner: Spawner) {
 
         // Get the event queue, swapping an empty one in place
         let event_queue = critical_section::with(|cs| {
-            GLOBAL_EVENT_QUEUE.borrow(cs).replace(Some(ConstGenericRingBuffer::new()))
+            GLOBAL_EVENT_QUEUE
+                .borrow(cs)
+                .replace(Some(ConstGenericRingBuffer::new()))
         });
 
         // Feed the entire event queue one at a time
         if let Some(mut event_queue) = event_queue {
             while let Some(event) = event_queue.dequeue() {
-
                 // TODO: Remove: Direct ESC control
                 if let kasari::InputEvent::Receiver(timestamp, ch, pulse_length) = event {
                     //esp_println::println!("Receiver event (main loop): ch{:?}: {:?}", ch, pulse_length);
                     match pulse_length {
                         Some(pulse_length) => {
                             let target_speed_percent = (pulse_length - 1500.0) * 0.2;
-                            esp_println::println!("pulse_length -> target_speed_percent: {:?} -> {:?}", pulse_length, target_speed_percent);
-                            let mut duty = target_speed_to_pwm_duty(target_speed_percent);
+                            esp_println::println!(
+                                "pulse_length -> target_speed_percent: {:?} -> {:?}",
+                                pulse_length,
+                                target_speed_percent
+                            );
+                            let mut duty = target_speed_to_pwm_duty(target_speed_percent, 2u32.pow(8));
                             esp_println::println!("Setting duty cycle: {:?}", duty);
-                            channel0.set_duty(duty);
-                            channel1.set_duty(duty);
+                            // Right motor; positive speed is downwards, causing
+                            // clockwise robot rotation
+                            channel0.set_duty_hw(duty);
+                            // Left motor; positive speed is downwards, causing
+                            // counter-clockwise robot rotation (not verified in
+                            // hardware)
+                            channel1.set_duty_hw(duty);
                         }
                         None => {
-                            //channel0.set_duty(75);
-                            //channel1.set_duty(75);
                             channel0.set_duty(0);
                             channel1.set_duty(0);
                         }
