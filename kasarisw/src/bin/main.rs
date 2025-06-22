@@ -343,6 +343,8 @@ mod kasari {
         pub motor_control_plan: Option<MotorControlPlan>,
 
         acceleration: f32, // Acceleration to the normal direction re. rotation
+        vbat: f32,
+        vbat_ok: bool,
     }
 
     impl MainLogic {
@@ -350,6 +352,8 @@ mod kasari {
             Self {
                 motor_control_plan: None,
                 acceleration: 0.0,
+                vbat: 0.0,
+                vbat_ok: false,
             }
         }
 
@@ -363,6 +367,10 @@ mod kasari {
                     self.acceleration = acceleration;
                 }
                 InputEvent::Receiver(timestamp, ch, pulse_length) => {
+                    if self.vbat_ok == false {
+                        self.motor_control_plan = None;
+                        return;
+                    }
                     //esp_println::println!("Receiver event: ch{:?}: {:?}", ch, pulse_length);
                     // TODO: Remove: Direct ESC control
                     match pulse_length {
@@ -386,7 +394,15 @@ mod kasari {
                         }
                     }
                 }
-                InputEvent::Vbat(timestamp, vbat) => {}
+                InputEvent::Vbat(timestamp, vbat) => {
+                    self.vbat = vbat;
+                    if self.vbat_ok {
+                        // TODO: Allow somewhat lower voltage under load
+                        self.vbat_ok = vbat > 9.0;
+                    } else {
+                        self.vbat_ok = vbat > 10.0;
+                    }
+                }
             }
         }
 
