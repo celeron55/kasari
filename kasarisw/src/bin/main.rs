@@ -324,6 +324,8 @@ async fn rmt_task(mut ch0: esp_hal::rmt::Channel<esp_hal::Async, 0>) {
 }
 
 mod kasari {
+    use crate::LOG_RECEIVER;
+
     pub enum InputEvent {
         Lidar(u64, f32, f32, f32, f32), // timestamp, distance samples (mm)
         Accelerometer(u64, f32),        // timestamp, acceleration (G)
@@ -332,9 +334,9 @@ mod kasari {
     }
 
     pub struct MotorControlPlan {
-        throttle: f32,             // 0.0...1.0
-        modulation_amplitude: f32, // -0.0....1.0
-        modulation_phase: f32,     // Some kind of an angle
+        pub throttle: f32,             // -1.0...1.0
+        pub modulation_amplitude: f32, // -0.0....1.0
+        pub modulation_phase: f32,     // Some kind of an angle
     }
 
     pub struct MainLogic {
@@ -362,6 +364,27 @@ mod kasari {
                 }
                 InputEvent::Receiver(timestamp, ch, pulse_length) => {
                     //esp_println::println!("Receiver event: ch{:?}: {:?}", ch, pulse_length);
+                    // TODO: Remove: Direct ESC control
+                    match pulse_length {
+                        Some(pulse_length) => {
+                            let target_speed_percent = (pulse_length - 1500.0) * 0.2;
+                            if LOG_RECEIVER {
+                                esp_println::println!(
+                                    "pulse_length -> target_speed_percent: {:?} -> {:?}",
+                                    pulse_length,
+                                    target_speed_percent
+                                );
+                            }
+                            self.motor_control_plan = Some(MotorControlPlan {
+                                throttle: target_speed_percent,
+                                modulation_amplitude: 0.0,
+                                modulation_phase: 0.0,
+                            });
+                        }
+                        None => {
+                            self.motor_control_plan = None;
+                        }
+                    }
                 }
                 InputEvent::Vbat(timestamp, vbat) => {}
             }
@@ -553,42 +576,31 @@ async fn main(spawner: Spawner) {
         // Feed the entire event queue one at a time
         if let Some(mut event_queue) = event_queue {
             while let Some(event) = event_queue.dequeue() {
-                // TODO: Remove: Direct ESC control
-                if let kasari::InputEvent::Receiver(timestamp, ch, pulse_length) = event {
-                    //esp_println::println!("Receiver event (main loop): ch{:?}: {:?}", ch, pulse_length);
-                    match pulse_length {
-                        Some(pulse_length) => {
-                            let target_speed_percent = (pulse_length - 1500.0) * 0.2;
-                            let mut duty =
-                                target_speed_to_pwm_duty(target_speed_percent, 2u32.pow(8));
-                            if LOG_RECEIVER {
-                                esp_println::println!(
-                                    "pulse_length -> target_speed_percent: {:?} -> {:?}",
-                                    pulse_length,
-                                    target_speed_percent
-                                );
-                                esp_println::println!("Setting duty cycle: {:?}", duty);
-                            }
-                            // Right motor; positive speed is downwards, causing
-                            // clockwise robot rotation
-                            channel0.set_duty_hw(duty);
-                            // Left motor; positive speed is downwards, causing
-                            // counter-clockwise robot rotation (not verified in
-                            // hardware)
-                            channel1.set_duty_hw(duty);
-                        }
-                        None => {
-                            channel0.set_duty(0);
-                            channel1.set_duty(0);
-                        }
-                    }
-                }
-
                 logic.feed_event(event);
             }
         }
 
         logic.step();
+
+        if let Some(ref plan) = logic.motor_control_plan {
+            // TODO: Implement modulation
+            let target_speed_percent = plan.throttle;
+            let mut duty =
+                target_speed_to_pwm_duty(target_speed_percent, 2u32.pow(8));
+            if LOG_RECEIVER {
+                esp_println::println!("Setting duty cycle: {:?}", duty);
+            }
+            // Right motor; positive speed is downwards, causing
+            // clockwise robot rotation
+            channel0.set_duty_hw(duty);
+            // Left motor; positive speed is downwards, causing
+            // counter-clockwise robot rotation (not verified in
+            // hardware)
+            channel1.set_duty_hw(duty);
+        } else {
+            channel0.set_duty(0);
+            channel1.set_duty(0);
+        }
 
         // TODO: Implement motor control in a task and send logic.motor_control_plan there
 
