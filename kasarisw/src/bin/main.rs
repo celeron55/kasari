@@ -12,10 +12,11 @@ use embassy_time::{Duration, Timer};
 use esp_alloc as _;
 use esp_backtrace as _;
 use esp_hal::{
+    analog::{adc, adc::Adc, adc::AdcConfig},
     gpio::{AnyPin, Level, Output, OutputConfig, Pin},
     ledc::{
-        channel as ledc_channel, channel::ChannelIFace, timer as ledc_timer, timer::TimerIFace,
-        Ledc, channel::ChannelHW
+        channel as ledc_channel, channel::ChannelHW, channel::ChannelIFace, timer as ledc_timer,
+        timer::TimerIFace, Ledc,
     },
     rmt::{PulseCode, Rmt, RxChannelAsync, RxChannelConfig, RxChannelCreatorAsync},
     spi::master::Spi,
@@ -28,6 +29,11 @@ use esp_hal::{
 use esp_println::println;
 use ringbuffer::{ConstGenericRingBuffer, RingBuffer};
 use static_cell::StaticCell; // For allocator
+
+// Logging constants
+const LOG_LIDAR: bool = false;
+const LOG_RECEIVER: bool = false;
+const LOG_VBAT: bool = false;
 
 // LIDAR constants
 const PACKET_SIZE: usize = 22;
@@ -119,7 +125,7 @@ async fn lidar_reader(
                         });
 
                         log_i += 1;
-                        if log_i % 20 == 1 {
+                        if log_i % 20 == 1 && LOG_LIDAR {
                             println!(
                                 "Packet {}: distances=[{}, {}, {}, {}] mm",
                                 log_i,
@@ -322,6 +328,7 @@ mod kasari {
         Lidar(u64, f32, f32, f32, f32), // timestamp, distance samples (mm)
         Accelerometer(u64, f32),        // timestamp, acceleration (G)
         Receiver(u64, u8, Option<f32>), // timestamp, channel (0=throttle), pulse length (us)
+        Vbat(u64, f32),                 // timestamp, battery voltage (V)
     }
 
     pub struct MotorControlPlan {
@@ -354,8 +361,9 @@ mod kasari {
                     self.acceleration = acceleration;
                 }
                 InputEvent::Receiver(timestamp, ch, pulse_length) => {
-                    esp_println::println!("Receiver event: ch{:?}: {:?}", ch, pulse_length);
+                    //esp_println::println!("Receiver event: ch{:?}: {:?}", ch, pulse_length);
                 }
+                InputEvent::Vbat(timestamp, vbat) => {}
             }
         }
 
@@ -387,6 +395,12 @@ async fn main(spawner: Spawner) {
 
     let encoder_emulation_output_pinmap = peripherals.GPIO13.degrade();
     let rc_receiver_ch1_pinmap = peripherals.GPIO34;
+
+    // ADC (battery voltage monitoring)
+
+    let mut adc1_config = AdcConfig::new();
+    let mut vbat_pin = adc1_config.enable_pin(peripherals.GPIO39, adc::Attenuation::_11dB);
+    let mut adc1 = Adc::new(peripherals.ADC1, adc1_config);
 
     // PWM output to ESCs
 
@@ -511,12 +525,30 @@ async fn main(spawner: Spawner) {
     loop {
         //esp_println::println!("Main loop");
 
+        // Measure battery voltage via 1k/10k resistor divider
+        // With the -11dB config the reference voltage should be 2.540V
+        // For some reason the result seems to be weirdly scaled and inverted:
+        // * 4095 = ~ 0.00 V_ADC
+        // * 3700 = ~ 0.45 V_ADC
+        // * 3050 = ~ 1.00 V_ADC, ~11.0 V_battery
+        let vbat_raw = nb::block!(adc1.read_oneshot(&mut vbat_pin)).unwrap();
+        let vbat = (4095 - vbat_raw) as f32 * 0.01045; // Experimentally calibrated
+        if LOG_VBAT {
+            esp_println::println!("vbat_raw: {:?}, vbat: {:?} V", vbat_raw, vbat);
+        }
+
         // Get the event queue, swapping an empty one in place
         let event_queue = critical_section::with(|cs| {
             GLOBAL_EVENT_QUEUE
                 .borrow(cs)
                 .replace(Some(ConstGenericRingBuffer::new()))
         });
+
+        // Feed an ad-hoc Vbat event
+        logic.feed_event(kasari::InputEvent::Vbat(
+            embassy_time::Instant::now().as_ticks(),
+            vbat,
+        ));
 
         // Feed the entire event queue one at a time
         if let Some(mut event_queue) = event_queue {
@@ -527,13 +559,16 @@ async fn main(spawner: Spawner) {
                     match pulse_length {
                         Some(pulse_length) => {
                             let target_speed_percent = (pulse_length - 1500.0) * 0.2;
-                            esp_println::println!(
-                                "pulse_length -> target_speed_percent: {:?} -> {:?}",
-                                pulse_length,
-                                target_speed_percent
-                            );
-                            let mut duty = target_speed_to_pwm_duty(target_speed_percent, 2u32.pow(8));
-                            esp_println::println!("Setting duty cycle: {:?}", duty);
+                            let mut duty =
+                                target_speed_to_pwm_duty(target_speed_percent, 2u32.pow(8));
+                            if LOG_RECEIVER {
+                                esp_println::println!(
+                                    "pulse_length -> target_speed_percent: {:?} -> {:?}",
+                                    pulse_length,
+                                    target_speed_percent
+                                );
+                                esp_println::println!("Setting duty cycle: {:?}", duty);
+                            }
                             // Right motor; positive speed is downwards, causing
                             // clockwise robot rotation
                             channel0.set_duty_hw(duty);

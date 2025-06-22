@@ -20,6 +20,7 @@ esp-backtrace = { version = "0.15.1", features = ["esp32", "println", "panic-han
 esp-hal          = { version = "1.0.0-beta.0", features = ["esp32", "unstable"] }
 esp-hal-embassy = {version = "0.7.0", features = ["esp32", "log"] }
 esp-println = { version = "0.13.1", features = ["esp32"] }
+nb = "1.1.0"
 ringbuffer = "0.15.0"
 static_cell = "2.1.0"
 
