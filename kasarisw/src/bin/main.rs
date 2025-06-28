@@ -26,7 +26,16 @@ use esp_hal::{
     uart::{Uart, UartRx, UartTx},
     Async,
 };
+use esp_idf_sys::{
+    esp_bt_controller_config_t, esp_bt_controller_enable, esp_bt_controller_init,
+    esp_bt_mode_t_ESP_BT_MODE_CLASSIC_BT, esp_spp_cb_t, esp_spp_init,
+    esp_spp_mode_t_ESP_SPP_MODE_CB, esp_spp_role_t_ESP_SPP_ROLE_SLAVE,
+    esp_spp_sec_t_ESP_SPP_SEC_AUTHENTICATE, esp_spp_start, esp_spp_write, ESP_SPP_CLOSE_EVT,
+    ESP_SPP_INIT_EVT, ESP_SPP_SRV_OPEN_EVT, ESP_SPP_START_EVT,
+};
+use esp_idf_sys::{esp_err_t, esp_spp_cb_event_t, esp_spp_cb_param_t, EspError};
 use esp_println::println;
+
 use ringbuffer::{ConstGenericRingBuffer, RingBuffer};
 use static_cell::StaticCell; // For allocator
 
@@ -601,8 +610,7 @@ async fn main(spawner: Spawner) {
         if let Some(ref plan) = logic.motor_control_plan {
             // TODO: Implement modulation
             let target_speed_percent = plan.throttle;
-            let mut duty =
-                target_speed_to_pwm_duty(target_speed_percent, 2u32.pow(8));
+            let mut duty = target_speed_to_pwm_duty(target_speed_percent, 2u32.pow(8));
             if LOG_RECEIVER {
                 esp_println::println!("Setting duty cycle: {:?}", duty);
             }
