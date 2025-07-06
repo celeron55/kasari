@@ -5,7 +5,6 @@ version = "0.1.0"
 
 [[bin]]
 name = "kasarisw"
-path = "./src/bin/main.rs"
 
 [dependencies]
 arrayvec = { version = "0.7.4", default-features = false, features = [] }
