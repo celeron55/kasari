@@ -9,12 +9,11 @@ name = "kasarisw"
 [dependencies]
 arrayvec = { version = "0.7.4", default-features = false, features = [] }
 critical-section = "1.2.0"
-embassy-executor = { version = "0.7.0", features = ["task-arena-size-65536"] }
+embassy-executor = { version = "0.7.0", features = ["task-arena-size-32768"] }
 embassy-futures = "0.1.1"
 embassy-sync = "0.7.0"
 embassy-time = "0.4.0"
 embedded-io-async = "0.6.1"
-esp-alloc        = "0.7.0"
 esp-backtrace = { version = "0.15.1", features = ["esp32", "println", "panic-handler"] }
 esp-hal          = { version = "1.0.0-beta.0", features = ["esp32", "unstable"] }
 esp-hal-embassy = {version = "0.8.1", features = ["esp32"] }
@@ -23,6 +22,8 @@ nb = "1.1.0"
 ringbuffer = "0.15.0"
 static_cell = "2.1.0"
 esp-wifi = { version = "0.14.1", features = ["esp32", "wifi"] }
+embassy-net = { version = "0.7.0", features = [ "tcp", "udp", "dhcpv4", "medium-ethernet"] }
+esp-alloc = "0.8.0"
 
 [profile.dev]
 # Rust debug is too slow.
