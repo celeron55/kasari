@@ -2,18 +2,22 @@
 use core::cell::RefCell;
 use critical_section::Mutex;
 use ringbuffer::ConstGenericRingBuffer;
+use embassy_sync::pubsub::PubSubChannel;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use static_cell::StaticCell;
 
 pub const LOG_LIDAR: bool = false;
 pub const LOG_RECEIVER: bool = false;
 pub const LOG_VBAT: bool = false;
 
-pub static GLOBAL_EVENT_QUEUE: Mutex<RefCell<Option<ConstGenericRingBuffer<kasari::InputEvent, 300>>>> =
-    Mutex::new(RefCell::new(None));
+pub type EventChannel = PubSubChannel<CriticalSectionRawMutex, kasari::InputEvent, 16, 2, 6>;
+pub static EVENT_CHANNEL: StaticCell<EventChannel> = StaticCell::new();
 
 pub mod kasari {
     use crate::shared::LOG_RECEIVER;
     use esp_println::println;
 
+	#[derive(Clone)]
     pub enum InputEvent {
         Lidar(u64, f32, f32, f32, f32), // timestamp, distance samples (mm)
         Accelerometer(u64, f32),        // timestamp, acceleration (G)

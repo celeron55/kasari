@@ -16,7 +16,7 @@ use esp_hal::{
 use esp_println::println;
 use ringbuffer::ConstGenericRingBuffer;
 use ringbuffer::RingBuffer;
-use crate::shared::{GLOBAL_EVENT_QUEUE, LOG_LIDAR, kasari::InputEvent};
+use crate::shared::{EventChannel, LOG_LIDAR, kasari::InputEvent};
 use esp_hal::rmt::RxChannelAsync;
 
 // LIDAR constants
@@ -46,7 +46,10 @@ pub async fn lidar_writer(
 pub async fn lidar_reader(
     mut rx: UartRx<'static, Async>,
     signal: &'static Signal<NoopRawMutex, usize>,
+    event_channel: &'static EventChannel,
 ) {
+	let publisher = event_channel.publisher().unwrap();
+
     const MAX_BUFFER_SIZE: usize = 2 * READ_BUF_SIZE + 16;
     let mut rbuf: [u8; MAX_BUFFER_SIZE] = [0u8; MAX_BUFFER_SIZE];
     let mut offset = 0;
@@ -80,21 +83,15 @@ pub async fn lidar_reader(
                     }
 
                     if let Some(parsed) = parse_packet(&packet) {
-                        critical_section::with(|cs| {
-                            if let Some(ref mut event_queue) =
-                                GLOBAL_EVENT_QUEUE.borrow(cs).borrow_mut().deref_mut()
-                            {
-                                let timestamp = embassy_time::Instant::now().as_ticks();
-                                let event = InputEvent::Lidar(
-                                    timestamp,
-                                    parsed.distances[0] as f32,
-                                    parsed.distances[1] as f32,
-                                    parsed.distances[2] as f32,
-                                    parsed.distances[3] as f32,
-                                );
-                                event_queue.push(event);
-                            }
-                        });
+                        let timestamp = embassy_time::Instant::now().as_ticks();
+						let event = InputEvent::Lidar(
+							timestamp,
+							parsed.distances[0] as f32,
+							parsed.distances[1] as f32,
+							parsed.distances[2] as f32,
+							parsed.distances[3] as f32,
+						);
+						publisher.publish(event).await;
 
                         log_i += 1;
                         if log_i % 20 == 1 && LOG_LIDAR {
@@ -166,7 +163,9 @@ pub fn compute_checksum(data: &[u8]) -> u16 {
 }
 
 #[embassy_executor::task]
-pub async fn accelerometer_task(mut spi: Spi<'static, esp_hal::Blocking>) {
+pub async fn accelerometer_task(mut spi: Spi<'static, esp_hal::Blocking>, event_channel: &'static EventChannel) {
+	let publisher = event_channel.publisher().unwrap();
+
     let mut buf = [(0x00 << 1) | 1, 0]; // DEVID_AD
     spi.transfer(&mut buf).unwrap();
     println!("DEVID_AD = {:#02x} (should be 0xad)", buf[1]);
@@ -184,22 +183,18 @@ pub async fn accelerometer_task(mut spi: Spi<'static, esp_hal::Blocking>) {
         let y_g = y_raw as f32 * 0.2;
         let z_g = z_raw as f32 * 0.2;
 
-        critical_section::with(|cs| {
-            if let Some(ref mut event_queue) =
-                GLOBAL_EVENT_QUEUE.borrow(cs).borrow_mut().deref_mut()
-            {
-                let timestamp = embassy_time::Instant::now().as_ticks();
-                let event = InputEvent::Accelerometer(timestamp, -y_g);
-                event_queue.push(event);
-            }
-        });
+		let timestamp = embassy_time::Instant::now().as_ticks();
+		let event = InputEvent::Accelerometer(timestamp, -y_g);
+		publisher.publish(event).await;
 
         Timer::after_millis(10).await;
     }
 }
 
 #[embassy_executor::task]
-pub async fn rmt_task(mut ch0: Channel<Async, 0>) {
+pub async fn rmt_task(mut ch0: Channel<Async, 0>, event_channel: &'static EventChannel) {
+	let publisher = event_channel.publisher().unwrap();
+
     let mut buffer0: [u32; 1] = [PulseCode::empty(); 1];
 
     loop {
@@ -228,14 +223,8 @@ pub async fn rmt_task(mut ch0: Channel<Async, 0>) {
             Err(_err) => {}
         }
 
-        critical_section::with(|cs| {
-            if let Some(ref mut event_queue) =
-                GLOBAL_EVENT_QUEUE.borrow(cs).borrow_mut().deref_mut()
-            {
-                let timestamp = embassy_time::Instant::now().as_ticks();
-                let event = InputEvent::Receiver(timestamp, 0, ch0_final_result);
-                event_queue.push(event);
-            }
-        });
+		let timestamp = embassy_time::Instant::now().as_ticks();
+		let event = InputEvent::Receiver(timestamp, 0, ch0_final_result);
+		publisher.publish(event).await;
     }
 }

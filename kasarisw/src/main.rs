@@ -45,6 +45,7 @@ use esp_wifi::{
     },
 };
 use embassy_futures::select::Either;
+use embassy_sync::pubsub::PubSubChannel;
 extern crate alloc;
 
 mod sensors;
@@ -102,6 +103,9 @@ async fn main(spawner: Spawner) {
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     let timg1 = TimerGroup::new(peripherals.TIMG1);
     esp_hal_embassy::init(timg1.timer0);
+
+	// This has to be initialized before any tasks are started
+	let event_channel = &*shared::EVENT_CHANNEL.init(PubSubChannel::new());
 
     // GPIO
     let encoder_emulation_output_pinmap = peripherals.GPIO13.degrade();
@@ -266,20 +270,21 @@ async fn main(spawner: Spawner) {
     println!("Use a static IP in the range 192.168.2.2 .. 192.168.2.255, use gateway 192.168.2.1");
     println!("Or connect to the ap `{SSID}` and point your browser to http://{sta_address}:8080/");
 
-    spawner.spawn(listener_task(ap_stack, sta_stack)).ok();
+    spawner.spawn(listener_task(ap_stack, sta_stack, event_channel)).ok();
 
     // Spawn tasks
     static SIGNAL: StaticCell<embassy_sync::signal::Signal<embassy_sync::blocking_mutex::raw::NoopRawMutex, usize>> = StaticCell::new();
     let signal = &*SIGNAL.init(embassy_sync::signal::Signal::new());
 
-    spawner.spawn(sensors::lidar_reader(rx, signal)).ok();
+    spawner.spawn(sensors::lidar_reader(rx, signal, event_channel)).ok();
     spawner.spawn(sensors::lidar_writer(tx, signal)).ok();
     spawner.spawn(encoder_emulation_task(encoder_emulation_output_pinmap)).ok();
-    spawner.spawn(sensors::accelerometer_task(spi)).ok();
-    spawner.spawn(sensors::rmt_task(rmt_ch0)).ok();
+    spawner.spawn(sensors::accelerometer_task(spi, event_channel)).ok();
+    spawner.spawn(sensors::rmt_task(rmt_ch0, event_channel)).ok();
 
     // Main loop
     let mut logic = shared::kasari::MainLogic::new();
+    let mut subscriber = event_channel.subscriber().unwrap();
 
     loop {
         let vbat_raw = nb::block!(adc1.read_oneshot(&mut vbat_pin)).unwrap();
@@ -288,22 +293,14 @@ async fn main(spawner: Spawner) {
             esp_println::println!("vbat_raw: {:?}, vbat: {:?} V", vbat_raw, vbat);
         }
 
-        let event_queue = critical_section::with(|cs| {
-            shared::GLOBAL_EVENT_QUEUE
-                .borrow(cs)
-                .replace(Some(ringbuffer::ConstGenericRingBuffer::new()))
-        });
-
         logic.feed_event(shared::kasari::InputEvent::Vbat(
             embassy_time::Instant::now().as_ticks(),
             vbat,
         ));
 
-        if let Some(mut event_queue) = event_queue {
-            while let Some(event) = event_queue.dequeue() {
-                logic.feed_event(event);
-            }
-        }
+		while let Some(event) = subscriber.try_next_message_pure() {
+			logic.feed_event(event);
+		}
 
         logic.step();
 
@@ -360,8 +357,54 @@ async fn net_task(mut runner: Runner<'static, WifiDevice<'static>>) {
     runner.run().await
 }
 
+use alloc::vec::Vec;
+use crate::shared::kasari::InputEvent; 
+
+fn serialize_event(event: &InputEvent) -> Vec<u8> {
+    let mut buf = Vec::new();
+    match event {
+        InputEvent::Lidar(timestamp, d1, d2, d3, d4) => {
+            buf.push(0); // Tag for Lidar
+            buf.extend_from_slice(&timestamp.to_le_bytes());
+            buf.extend_from_slice(&d1.to_le_bytes());
+            buf.extend_from_slice(&d2.to_le_bytes());
+            buf.extend_from_slice(&d3.to_le_bytes());
+            buf.extend_from_slice(&d4.to_le_bytes());
+        }
+        InputEvent::Accelerometer(timestamp, acceleration) => {
+            buf.push(1); // Tag for Accelerometer
+            buf.extend_from_slice(&timestamp.to_le_bytes());
+            buf.extend_from_slice(&acceleration.to_le_bytes());
+        }
+        InputEvent::Receiver(timestamp, channel, pulse_length) => {
+            buf.push(2); // Tag for Receiver
+            buf.extend_from_slice(&timestamp.to_le_bytes());
+            buf.push(*channel);
+            if let Some(pl) = pulse_length {
+                buf.push(1); // Flag: pulse_length present
+                buf.extend_from_slice(&pl.to_le_bytes());
+            } else {
+                buf.push(0); // Flag: pulse_length absent
+            }
+        }
+        InputEvent::Vbat(timestamp, voltage) => {
+            buf.push(3); // Tag for Vbat
+            buf.extend_from_slice(&timestamp.to_le_bytes());
+            buf.extend_from_slice(&voltage.to_le_bytes());
+        }
+    }
+    buf
+}
+
+use crate::shared::EventChannel;
+use embedded_io_async::Write;
+
 #[embassy_executor::task]
-async fn listener_task(ap_stack: embassy_net::Stack<'static>, sta_stack: embassy_net::Stack<'static>) {
+async fn listener_task(ap_stack: embassy_net::Stack<'static>, sta_stack: embassy_net::Stack<'static>, event_channel: &'static EventChannel) {
+	use embassy_futures::select::{select, Either};
+
+	let mut subscriber = event_channel.subscriber().unwrap();
+
     let mut ap_server_rx_buffer = [0; 1536];
     let mut ap_server_tx_buffer = [0; 1536];
     let mut sta_server_rx_buffer = [0; 1536];
@@ -404,82 +447,81 @@ async fn listener_task(ap_stack: embassy_net::Stack<'static>, sta_stack: embassy
             }),
         )
         .await;
-        let (r, server_socket) = match either_socket {
+        let (r, socket) = match either_socket {
             Either::First(r) => (r, &mut ap_server_socket),
             Either::Second(r) => (r, &mut sta_server_socket),
         };
-        println!("Connected...");
+        println!("Connected!");
 
-        if let Err(e) = r {
-            println!("connect error: {:?}", e);
-            continue;
-        }
-
-        use embedded_io_async::Write;
+        // Step 1: Read the HTTP request until the end of headers
         let mut buffer = [0u8; 1024];
         let mut pos = 0;
         loop {
-            match server_socket.read(&mut buffer).await {
+            match socket.read(&mut buffer[pos..]).await {
                 Ok(0) => {
-                    println!("AP read EOF");
+                    println!("Client disconnected before sending request");
                     break;
                 }
                 Ok(len) => {
-                    let to_print =
-                        unsafe { core::str::from_utf8_unchecked(&buffer[..(pos + len)]) };
-
-                    if to_print.contains("\r\n\r\n") {
-                        print!("{}", to_print);
-                        println!();
+                    pos += len;
+                    if buffer[..pos].windows(4).any(|window| window == b"\r\n\r\n") {
                         break;
                     }
-
-                    pos += len;
                 }
                 Err(e) => {
-                    println!("AP read error: {:?}", e);
+                    println!("Read error: {:?}", e);
                     break;
                 }
-            };
+            }
         }
 
-        // Collect device status information
-        let ap_status = if ap_stack.is_link_up() { "Connected" } else { "Disconnected" };
-        let sta_status = if sta_stack.is_link_up() { "Connected" } else { "Disconnected" };
-        let ap_ip = ap_stack.config_v4()
-            .map(|c| c.address.address())
-            .unwrap_or(Ipv4Addr::UNSPECIFIED);
-        let sta_ip = sta_stack.config_v4()
-            .map(|c| c.address.address())
-            .unwrap_or(Ipv4Addr::UNSPECIFIED);
-
-        // Generate HTML response with device status
-        let html_response = alloc::format!(
-            "HTTP/1.0 200 OK\r\nContent-Type: text/html\r\n\r\n\
-            <html>\
-                <body>\
-                    <h1>Device Status</h1>\
-                    <p>AP Status: {}</p>\
-                    <p>AP IP: {}</p>\
-                    <p>STA Status: {}</p>\
-                    <p>STA IP: {}</p>\
-                </body>\
-            </html>\r\n",
-            ap_status, ap_ip, sta_status, sta_ip
-        );
-
-        // Send the response
-        if let Err(e) = server_socket.write_all(html_response.as_bytes()).await {
-            println!("write error: {:?}", e);
+        // Step 2: Send HTTP headers with binary MIME type and chunked encoding
+        let headers = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Type: application/octet-stream\r\n\r\n";
+        if let Err(e) = socket.write_all(headers.as_bytes()).await {
+            println!("Write error: {:?}", e);
+            continue;
         }
 
-        let r = server_socket.flush().await;
-        if let Err(e) = r {
-            println!("AP flush error: {:?}", e);
+        // Step 3: Stream binary data indefinitely
+        loop {
+            let event_future = subscriber.next_message_pure();
+            let mut dummy_buf = [0; 1];
+            let read_future = socket.read(&mut dummy_buf); // Dummy read to detect disconnect
+
+            match select(event_future, read_future).await {
+                Either::First(event) => {
+                    // Serialize the event into binary format
+                    let serialized = serialize_event(&event);
+                    // Format chunk: size in hex, followed by data
+                    let size_hex = alloc::format!("{:x}\r\n", serialized.len());
+                    if let Err(e) = socket.write_all(size_hex.as_bytes()).await {
+                        println!("Write error: {:?}", e);
+                        break;
+                    }
+                    if let Err(e) = socket.write_all(&serialized).await {
+                        println!("Write error: {:?}", e);
+                        break;
+                    }
+                    if let Err(e) = socket.write_all(b"\r\n").await {
+                        println!("Write error: {:?}", e);
+                        break;
+                    }
+                }
+                Either::Second(Ok(0)) => {
+                    println!("Client disconnected");
+                    break;
+                }
+                Either::Second(Err(e)) => {
+                    println!("Read error: {:?}", e);
+                    break;
+                }
+                _ => {}
+            }
         }
+
+        // Clean up connection
+        socket.close();
         Timer::after(Duration::from_millis(1000)).await;
-        server_socket.close();
-        Timer::after(Duration::from_millis(1000)).await;
-        server_socket.abort();
+        socket.abort();
     }
 }
