@@ -40,7 +40,7 @@ fn target_speed_to_pwm_duty(speed_percent: f32, duty_range: u32) -> u32 {
 }
 
 #[embassy_executor::task]
-async fn encoder_emulation_task(encoder_emulation_output_pinmap: AnyPin) {
+async fn encoder_emulation_task(encoder_emulation_output_pinmap: AnyPin<'static>) {
     let mut encoder_emulation_output_pin = Output::new(
         encoder_emulation_output_pinmap,
         Level::High,
