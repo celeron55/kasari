@@ -18,3 +18,7 @@ $ cargo run
 
 Monitor target:
 $ ./monitor.sh
+
+Receiving events from the robot:
+$ curl 192.168.1.248:8080 | python tools/parse_events.py
+
