@@ -45,6 +45,7 @@ use esp_wifi::{
     },
 };
 use embassy_futures::select::Either;
+extern crate alloc;
 
 mod sensors;
 mod shared;
@@ -441,83 +442,37 @@ async fn listener_task(ap_stack: embassy_net::Stack<'static>, sta_stack: embassy
                 }
             };
         }
-        if sta_stack.is_link_up() {
-            let remote_endpoint = (Ipv4Addr::new(142, 250, 185, 115), 80);
-            println!("connecting...");
-            let r = sta_client_socket.connect(remote_endpoint).await;
-            if let Err(e) = r {
-                println!("STA connect error: {:?}", e);
-                continue;
-            }
 
-            use embedded_io_async::Write;
-            let r = sta_client_socket
-                .write_all(b"GET / HTTP/1.0\r\nHost: www.mobile-j.de\r\n\r\n")
-                .await;
+        // Collect device status information
+        let ap_status = if ap_stack.is_link_up() { "Connected" } else { "Disconnected" };
+        let sta_status = if sta_stack.is_link_up() { "Connected" } else { "Disconnected" };
+        let ap_ip = ap_stack.config_v4()
+            .map(|c| c.address.address())
+            .unwrap_or(Ipv4Addr::UNSPECIFIED);
+        let sta_ip = sta_stack.config_v4()
+            .map(|c| c.address.address())
+            .unwrap_or(Ipv4Addr::UNSPECIFIED);
 
-            if let Err(e) = r {
-                println!("STA write error: {:?}", e);
+        // Generate HTML response with device status
+        let html_response = alloc::format!(
+            "HTTP/1.0 200 OK\r\nContent-Type: text/html\r\n\r\n\
+            <html>\
+                <body>\
+                    <h1>Device Status</h1>\
+                    <p>AP Status: {}</p>\
+                    <p>AP IP: {}</p>\
+                    <p>STA Status: {}</p>\
+                    <p>STA IP: {}</p>\
+                </body>\
+            </html>\r\n",
+            ap_status, ap_ip, sta_status, sta_ip
+        );
 
-                let r = server_socket
-                    .write_all(
-                        b"HTTP/1.0 500 Internal Server Error\r\n\r\n\
-                        <html>\
-                            <body>\
-                                <h1>Hello Rust! Hello esp-wifi! STA failed to send request.</h1>\
-                            </body>\
-                        </html>\r\n\
-                        ",
-                    )
-                    .await;
-                if let Err(e) = r {
-                    println!("AP write error: {:?}", e);
-                }
-            } else {
-                let r = sta_client_socket.flush().await;
-                if let Err(e) = r {
-                    println!("STA flush error: {:?}", e);
-                } else {
-                    println!("connected!");
-                    let mut buf = [0; 1024];
-                    loop {
-                        match sta_client_socket.read(&mut buf).await {
-                            Ok(0) => {
-                                println!("STA read EOF");
-                                break;
-                            }
-                            Ok(n) => {
-                                let r = server_socket.write_all(&buf[..n]).await;
-                                if let Err(e) = r {
-                                    println!("AP write error: {:?}", e);
-                                    break;
-                                }
-                            }
-                            Err(e) => {
-                                println!("STA read error: {:?}", e);
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-
-            sta_client_socket.close();
-        } else {
-            let r = server_socket
-                .write_all(
-                    b"HTTP/1.0 200 OK\r\n\r\n\
-                    <html>\
-                        <body>\
-                            <h1>Hello Rust! Hello esp-wifi! STA is not connected.</h1>\
-                        </body>\
-                    </html>\r\n\
-                    ",
-                )
-                .await;
-            if let Err(e) = r {
-                println!("AP write error: {:?}", e);
-            }
+        // Send the response
+        if let Err(e) = server_socket.write_all(html_response.as_bytes()).await {
+            println!("write error: {:?}", e);
         }
+
         let r = server_socket.flush().await;
         if let Err(e) = r {
             println!("AP flush error: {:?}", e);
