@@ -184,7 +184,7 @@ pub async fn accelerometer_task(mut spi: Spi<'static, esp_hal::Blocking>, event_
         let z_g = z_raw as f32 * 0.2;
 
 		let timestamp = embassy_time::Instant::now().as_ticks();
-		let event = InputEvent::Accelerometer(timestamp, -y_g);
+		let event = InputEvent::Accelerometer(timestamp, -y_g, -z_g);
 		publisher.publish(event).await;
 
         Timer::after_millis(10).await;

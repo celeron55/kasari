@@ -371,10 +371,11 @@ fn serialize_event(event: &InputEvent) -> Vec<u8> {
             buf.extend_from_slice(&d3.to_le_bytes());
             buf.extend_from_slice(&d4.to_le_bytes());
         }
-        InputEvent::Accelerometer(timestamp, acceleration) => {
+        InputEvent::Accelerometer(timestamp, acceleration_y, acceleration_z) => {
             buf.push(1); // Tag for Accelerometer
             buf.extend_from_slice(&timestamp.to_le_bytes());
-            buf.extend_from_slice(&acceleration.to_le_bytes());
+            buf.extend_from_slice(&acceleration_y.to_le_bytes());
+            buf.extend_from_slice(&acceleration_z.to_le_bytes());
         }
         InputEvent::Receiver(timestamp, channel, pulse_length) => {
             buf.push(2); // Tag for Receiver

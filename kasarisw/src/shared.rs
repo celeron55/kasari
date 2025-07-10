@@ -20,7 +20,7 @@ pub mod kasari {
 	#[derive(Clone)]
     pub enum InputEvent {
         Lidar(u64, f32, f32, f32, f32), // timestamp, distance samples (mm)
-        Accelerometer(u64, f32),        // timestamp, acceleration (G)
+        Accelerometer(u64, f32, f32),        // timestamp, acceleration Y (G), acceleration Z (G)
         Receiver(u64, u8, Option<f32>), // timestamp, channel (0=throttle), pulse length (us)
         Vbat(u64, f32),                 // timestamp, battery voltage (V)
     }
@@ -33,7 +33,8 @@ pub mod kasari {
 
     pub struct MainLogic {
         pub motor_control_plan: Option<MotorControlPlan>,
-        acceleration: f32,
+        acceleration_y: f32,
+        acceleration_z: f32,
         vbat: f32,
         vbat_ok: bool,
     }
@@ -42,7 +43,8 @@ pub mod kasari {
         pub fn new() -> Self {
             Self {
                 motor_control_plan: None,
-                acceleration: 0.0,
+                acceleration_y: 0.0,
+                acceleration_z: 0.0,
                 vbat: 0.0,
                 vbat_ok: false,
             }
@@ -51,8 +53,9 @@ pub mod kasari {
         pub fn feed_event(&mut self, event: InputEvent) {
             match event {
                 InputEvent::Lidar(_timestamp, _d1, _d2, _d3, _d4) => {}
-                InputEvent::Accelerometer(_timestamp, acceleration) => {
-                    self.acceleration = acceleration;
+                InputEvent::Accelerometer(_timestamp, a_y, a_z) => {
+                    self.acceleration_y = a_y;
+                    self.acceleration_z = a_z;
                 }
                 InputEvent::Receiver(_timestamp, _ch, pulse_length) => {
                     if !self.vbat_ok {
