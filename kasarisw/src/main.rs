@@ -284,19 +284,28 @@ async fn main(spawner: Spawner) {
 
     // Main loop
     let mut logic = shared::kasari::MainLogic::new();
+    let mut publisher = event_channel.publisher().unwrap();
     let mut subscriber = event_channel.subscriber().unwrap();
+    let mut loop_i: u64 = 0;
 
     loop {
-        let vbat_raw = nb::block!(adc1.read_oneshot(&mut vbat_pin)).unwrap();
-        let vbat = (4095 - vbat_raw) as f32 * 0.01045;
-        if shared::LOG_VBAT {
-            esp_println::println!("vbat_raw: {:?}, vbat: {:?} V", vbat_raw, vbat);
-        }
+		loop_i += 1;
 
-        logic.feed_event(shared::kasari::InputEvent::Vbat(
-            embassy_time::Instant::now().as_ticks(),
-            vbat,
-        ));
+		// Measure and publish Vbat
+		if loop_i % 10 == 0 {
+			let vbat_raw = nb::block!(adc1.read_oneshot(&mut vbat_pin)).unwrap();
+			let vbat = (4095 - vbat_raw) as f32 * 0.01045;
+			if shared::LOG_VBAT {
+				esp_println::println!("vbat_raw: {:?}, vbat: {:?} V", vbat_raw, vbat);
+			}
+
+			publisher.publish(
+				shared::kasari::InputEvent::Vbat(
+					embassy_time::Instant::now().as_ticks(),
+					vbat,
+				)
+			).await;
+		}
 
 		while let Some(event) = subscriber.try_next_message_pure() {
 			logic.feed_event(event);
