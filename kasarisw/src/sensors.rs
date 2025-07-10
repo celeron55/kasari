@@ -128,10 +128,11 @@ pub fn parse_packet(packet: &[u8]) -> Option<ParsedPacket> {
         return None;
     }
 
-    let angle = ((packet[1] as u16).wrapping_sub(0xA0)) * 4;
-    if angle > 360 {
+    let a0 = (packet[1] as u16).wrapping_sub(0xA0);
+    if a0 > 360 / 4 {
         return None;
     }
+    let angle = a0 * 4;
 
     let mut distances = [0u16; 4];
     for (i, dist) in distances.iter_mut().enumerate() {
