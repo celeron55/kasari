@@ -15,11 +15,11 @@ def parse_event(buffer):
         return ('Lidar', timestamp, d1, d2, d3, d4), buffer[25:]
     
     elif tag == 1:  # Accelerometer
-        if len(buffer) < 13:
+        if len(buffer) < 17:
             return None, buffer
-        data = buffer[1:13]
-        timestamp, acceleration = struct.unpack('<Qf', data)
-        return ('Accelerometer', timestamp, acceleration), buffer[13:]
+        data = buffer[1:17]
+        timestamp, acceleration_y, acceleration_z = struct.unpack('<Qff', data)
+        return ('Accelerometer', timestamp, acceleration_y, acceleration_z), buffer[17:]
     
     elif tag == 2:  # Receiver
         if len(buffer) < 11:
@@ -47,25 +47,27 @@ def parse_event(buffer):
         # Unknown tag, skip 1 byte
         return None, buffer[1:]
 
-# Initialize an empty buffer
-buffer = b''
+# Main entry point
+if __name__ == "__main__":
+    # Initialize an empty buffer
+    buffer = b''
 
-# Main loop to process the stream
-while True:
-    # Parse as many as possible, handling skips without premature break
-    while len(buffer) >= 1:
-        old_len = len(buffer)
-        event, buffer = parse_event(buffer)
-        if event is not None:
-            print(event)
-        else:
-            if len(buffer) >= old_len:
-                # No progress (incomplete event), wait for more
-                break
-            # Else: skipped invalid, continue parsing remaining buffer
-    
-    # Read more data from stdin
-    chunk = sys.stdin.buffer.read(1024)
-    if not chunk:
-        break
-    buffer += chunk
+    # Main loop to process the stream
+    while True:
+        # Parse as many as possible, handling skips without premature break
+        while len(buffer) >= 1:
+            old_len = len(buffer)
+            event, buffer = parse_event(buffer)
+            if event is not None:
+                print(event)
+            else:
+                if len(buffer) >= old_len:
+                    # No progress (incomplete event), wait for more
+                    break
+                # Else: skipped invalid, continue parsing remaining buffer
+
+        # Read more data from stdin
+        chunk = sys.stdin.buffer.read(1024)
+        if not chunk:
+            break
+        buffer += chunk

@@ -6,57 +6,11 @@ import threading
 import time
 from collections import defaultdict
 import queue
+from parse_events import parse_event
 
 # Shared queues for events and status (thread-safe)
 event_queue = queue.Queue()
 status_queue = queue.Queue()
-
-# Function to parse a single event
-def parse_event(buffer):
-    """Parse a single event from the buffer, returning the event and remaining buffer."""
-    if len(buffer) < 1:
-        return None, buffer
-    tag = buffer[0]
-    
-    if tag == 0:  # Lidar
-        if len(buffer) < 25:
-            return None, buffer
-        data = buffer[1:25]
-        timestamp, d1, d2, d3, d4 = struct.unpack('<Qffff', data)
-        return ('Lidar', timestamp, d1, d2, d3, d4), buffer[25:]
-    
-    elif tag == 1:  # Accelerometer
-        if len(buffer) < 13:
-            return None, buffer
-        data = buffer[1:13]
-        timestamp, acceleration = struct.unpack('<Qf', data)
-        return ('Accelerometer', timestamp, acceleration), buffer[13:]
-    
-    elif tag == 2:  # Receiver
-        if len(buffer) < 11:
-            return None, buffer
-        timestamp, channel, flag = struct.unpack('<QBB', buffer[1:11])
-        if flag == 0:
-            return ('Receiver', timestamp, channel, None), buffer[11:]
-        elif flag == 1:
-            if len(buffer) < 15:
-                return None, buffer
-            pulse_length = struct.unpack('<f', buffer[11:15])[0]
-            return ('Receiver', timestamp, channel, pulse_length), buffer[15:]
-        else:
-            # Invalid flag, skip min event size (tag + 10 bytes)
-            return None, buffer[11:]
-    
-    elif tag == 3:  # Vbat
-        if len(buffer) < 13:
-            return None, buffer
-        data = buffer[1:13]
-        timestamp, voltage = struct.unpack('<Qf', data)
-        return ('Vbat', timestamp, voltage), buffer[13:]
-    
-    else:
-        # Unknown tag, skip 1 byte
-        return None, buffer[1:]
 
 # GUI class
 class SensorGUI:
@@ -85,6 +39,9 @@ class SensorGUI:
         
         # Start updating GUI
         self.update_gui()
+
+        # Connect at startup
+        self.connect()
 
     def create_widgets(self):
         self.frame = ttk.Frame(self.root, padding="10")
@@ -207,8 +164,8 @@ class SensorGUI:
     def format_accel(self):
         if self.latest_data['Accelerometer'] == "No data yet":
             return "No data yet"
-        ts, accel = self.latest_data['Accelerometer']
-        return f"Timestamp: {ts}, Acceleration: {accel:.2f}"
+        ts, accel_y, accel_z = self.latest_data['Accelerometer']
+        return f"Timestamp: {ts}, Acceleration Y: {accel_y:.2f}, Z:  {accel_z:.2f}"
 
     def format_receiver(self):
         if self.latest_data['Receiver'] == "No data yet":
