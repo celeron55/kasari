@@ -17,6 +17,7 @@ class SensorGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("Sensor Data Monitor")
+        self.root.geometry("1000x400")
         
         # Make the root grid expandable
         self.root.rowconfigure(0, weight=1)
