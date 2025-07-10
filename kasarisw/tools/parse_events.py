@@ -33,8 +33,8 @@ def parse_event(buffer):
             pulse_length = struct.unpack('<f', buffer[11:15])[0]
             return ('Receiver', timestamp, channel, pulse_length), buffer[15:]
         else:
-            # Invalid flag, skip one byte
-            return None, buffer[1:]
+            # Invalid flag, skip min event size (tag + 10 bytes)
+            return None, buffer[11:]
     
     elif tag == 3:  # Vbat
         if len(buffer) < 13:
@@ -44,23 +44,28 @@ def parse_event(buffer):
         return ('Vbat', timestamp, voltage), buffer[13:]
     
     else:
-        # Unknown tag, skip one byte
+        # Unknown tag, skip 1 byte
         return None, buffer[1:]
 
-# Initialize an empty buffer to accumulate incoming data
+# Initialize an empty buffer
 buffer = b''
 
 # Main loop to process the stream
 while True:
-    # Parse as many events as possible from the current buffer
+    # Parse as many as possible, handling skips without premature break
     while len(buffer) >= 1:
+        old_len = len(buffer)
         event, buffer = parse_event(buffer)
-        if event is None:
-            break  # Not enough data for a complete event, read more
-        print(event)  # Process the event (here, just printing it)
+        if event is not None:
+            print(event)
+        else:
+            if len(buffer) >= old_len:
+                # No progress (incomplete event), wait for more
+                break
+            # Else: skipped invalid, continue parsing remaining buffer
     
     # Read more data from stdin
     chunk = sys.stdin.buffer.read(1024)
     if not chunk:
-        break  # End of input stream
+        break
     buffer += chunk
