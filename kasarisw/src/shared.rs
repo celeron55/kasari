@@ -16,6 +16,7 @@ pub static EVENT_CHANNEL: StaticCell<EventChannel> = StaticCell::new();
 pub mod kasari {
     use crate::shared::LOG_RECEIVER;
     use esp_println::println;
+	use alloc::vec::Vec;
 
 	#[derive(Clone)]
     pub enum InputEvent {
@@ -23,9 +24,11 @@ pub mod kasari {
         Accelerometer(u64, f32, f32),        // timestamp, acceleration Y (G), acceleration Z (G)
         Receiver(u64, u8, Option<f32>), // timestamp, channel (0=throttle), pulse length (us)
         Vbat(u64, f32),                 // timestamp, battery voltage (V)
+        WifiControl(u64, u8, f32, f32, f32),// timestamp, mode, rotation speed, movement speed, turning speed
     }
 
     pub struct MotorControlPlan {
+		pub timestamp: u64,
         pub throttle: f32,             // -1.0...1.0
         pub modulation_amplitude: f32, // -0.0....1.0
         pub modulation_phase: f32,     // Some kind of an angle
@@ -37,6 +40,10 @@ pub mod kasari {
         acceleration_z: f32,
         vbat: f32,
         vbat_ok: bool,
+        control_mode: u8,
+        control_rotation_speed: f32,
+        control_movement_speed: f32,
+        control_turning_speed: f32,
     }
 
     impl MainLogic {
@@ -47,6 +54,10 @@ pub mod kasari {
                 acceleration_z: 0.0,
                 vbat: 0.0,
                 vbat_ok: false,
+				control_mode: 0,
+				control_rotation_speed: 0.0,
+				control_movement_speed: 0.0,
+				control_turning_speed: 0.0,
             }
         }
 
@@ -57,7 +68,10 @@ pub mod kasari {
                     self.acceleration_y = a_y;
                     self.acceleration_z = a_z;
                 }
-                InputEvent::Receiver(_timestamp, _ch, pulse_length) => {
+                InputEvent::Receiver(timestamp, _ch, pulse_length) => {
+					if self.control_mode != 0 {
+						return;
+					}
                     if !self.vbat_ok {
                         self.motor_control_plan = None;
                         return;
@@ -73,6 +87,7 @@ pub mod kasari {
                                 );
                             }
                             self.motor_control_plan = Some(MotorControlPlan {
+								timestamp: timestamp,
                                 throttle: target_speed_percent,
                                 modulation_amplitude: 0.0,
                                 modulation_phase: 0.0,
@@ -91,9 +106,76 @@ pub mod kasari {
                         self.vbat_ok = vbat > 10.0;
                     }
                 }
+				InputEvent::WifiControl(_timestamp, mode, r, m, t) => {
+					println!("WifiControl({}, {}, {}, {})", mode, r, m, t);
+					self.control_mode = mode;
+					self.control_rotation_speed = r;
+					self.control_movement_speed = m;
+					self.control_turning_speed = t;
+					if self.control_mode != 1 && self.control_mode != 2 {
+						return;
+					}
+                    if !self.vbat_ok {
+                        self.motor_control_plan = None;
+                        return;
+                    }
+                    if self.control_mode == 1 {
+						let timestamp = embassy_time::Instant::now().as_ticks();
+						self.motor_control_plan = Some(MotorControlPlan {
+							timestamp: timestamp,
+							throttle: self.control_rotation_speed,
+							modulation_amplitude: 0.0,
+							modulation_phase: 0.0,
+						});
+					}
+				}
             }
         }
 
         pub fn step(&mut self) {}
     }
+
+	pub fn serialize_event(event: &InputEvent) -> Vec<u8> {
+		let mut buf = Vec::new();
+		match event {
+			InputEvent::Lidar(timestamp, d1, d2, d3, d4) => {
+				buf.push(0); // Tag for Lidar
+				buf.extend_from_slice(&timestamp.to_le_bytes());
+				buf.extend_from_slice(&d1.to_le_bytes());
+				buf.extend_from_slice(&d2.to_le_bytes());
+				buf.extend_from_slice(&d3.to_le_bytes());
+				buf.extend_from_slice(&d4.to_le_bytes());
+			}
+			InputEvent::Accelerometer(timestamp, acceleration_y, acceleration_z) => {
+				buf.push(1); // Tag for Accelerometer
+				buf.extend_from_slice(&timestamp.to_le_bytes());
+				buf.extend_from_slice(&acceleration_y.to_le_bytes());
+				buf.extend_from_slice(&acceleration_z.to_le_bytes());
+			}
+			InputEvent::Receiver(timestamp, channel, pulse_length) => {
+				buf.push(2); // Tag for Receiver
+				buf.extend_from_slice(&timestamp.to_le_bytes());
+				buf.push(*channel);
+				if let Some(pl) = pulse_length {
+					buf.push(1); // Flag: pulse_length present
+					buf.extend_from_slice(&pl.to_le_bytes());
+				} else {
+					buf.push(0); // Flag: pulse_length absent
+				}
+			}
+			InputEvent::Vbat(timestamp, voltage) => {
+				buf.push(3); // Tag for Vbat
+				buf.extend_from_slice(&timestamp.to_le_bytes());
+				buf.extend_from_slice(&voltage.to_le_bytes());
+			}
+			InputEvent::WifiControl(timestamp, mode, r, m, t) => {
+				buf.push(4); // Tag for Command
+				buf.extend_from_slice(&mode.to_le_bytes());
+				buf.extend_from_slice(&r.to_le_bytes());
+				buf.extend_from_slice(&m.to_le_bytes());
+				buf.extend_from_slice(&t.to_le_bytes());
+			}
+		}
+		buf
+	}
 }

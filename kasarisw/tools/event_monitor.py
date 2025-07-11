@@ -12,12 +12,21 @@ from parse_events import parse_event
 event_queue = queue.Queue()
 status_queue = queue.Queue()
 
+# Event tags (assumed based on common patterns; adjust if necessary)
+EVENT_TAGS = {
+    'Lidar': 0,
+    'Accelerometer': 1,
+    'Receiver': 2,
+    'Vbat': 3,
+    'WifiControl': 4,  # Assuming this tag for WifiControl
+}
+
 # GUI class
 class SensorGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("Sensor Data Monitor")
-        self.root.geometry("1000x400")
+        self.root.geometry("1000x700")
         
         # Make the root grid expandable
         self.root.rowconfigure(0, weight=1)
@@ -31,6 +40,15 @@ class SensorGUI:
         self.running = False
         self.thread = None
         self.sock = None
+        
+        # Control states
+        self.control_active = False
+        self.autonomous_active = False
+        
+        # Slider variables
+        self.r_var = tk.DoubleVar(value=0.0)
+        self.m_var = tk.DoubleVar(value=0.0)
+        self.t_var = tk.DoubleVar(value=0.0)
         
         # Create widgets
         self.create_widgets()
@@ -85,12 +103,31 @@ class SensorGUI:
         self.vbat_label = ttk.Label(self.frame, text=self.format_vbat())
         self.vbat_label.grid(row=9, column=0, columnspan=3, sticky=tk.W)
         
-        # Command section
-        ttk.Label(self.frame, text="Command:").grid(row=10, column=0, sticky=tk.W)
-        self.command_entry = ttk.Entry(self.frame)
-        self.command_entry.grid(row=10, column=1, sticky=tk.W)
-        self.send_button = ttk.Button(self.frame, text="Send", command=self.on_send)
-        self.send_button.grid(row=10, column=2, sticky=tk.W)
+        # Large toggle button for control
+        style = ttk.Style()
+        style.configure('Large.TButton', font=('Helvetica', 20), padding=10)
+        self.control_button = ttk.Button(self.frame, text="Control Target: OFF", command=self.toggle_control, style='Large.TButton')
+        self.control_button.grid(row=10, column=0, columnspan=3, sticky=tk.NSEW, pady=10)
+        
+        # Autonomous mode button
+        self.autonomous_button = ttk.Button(self.frame, text="Autonomous Mode: OFF", command=self.toggle_autonomous, style='Large.TButton')
+        self.autonomous_button.grid(row=11, column=0, columnspan=3, sticky=tk.NSEW, pady=10)
+        
+        # Sliders for r, m, t
+        ttk.Label(self.frame, text="Rotation:").grid(row=12, column=0, sticky=tk.W)
+        self.r_scale = ttk.Scale(self.frame, from_=-100.0, to=100.0, orient='horizontal', variable=self.r_var)
+        self.r_scale.grid(row=12, column=1, columnspan=2, sticky=tk.EW)
+        
+        ttk.Label(self.frame, text="Movement:").grid(row=13, column=0, sticky=tk.W)
+        self.m_scale = ttk.Scale(self.frame, from_=-100.0, to=100.0, orient='horizontal', variable=self.m_var)
+        self.m_scale.grid(row=13, column=1, columnspan=2, sticky=tk.EW)
+        
+        ttk.Label(self.frame, text="Turning:").grid(row=14, column=0, sticky=tk.W)
+        self.t_scale = ttk.Scale(self.frame, from_=-100.0, to=100.0, orient='horizontal', variable=self.t_var)
+        self.t_scale.grid(row=14, column=1, columnspan=2, sticky=tk.EW)
+        
+        # Initially disable sliders
+        self.set_sliders_state('disabled')
 
     def on_resize(self, event):
         # Update wraplength based on current frame width
@@ -155,6 +192,7 @@ class SensorGUI:
                                 break
             except Exception as e:
                 if self.running:
+                    print(f"Error: {str(e)} - Retrying in 5 seconds...")
                     status_queue.put(f"Error: {str(e)} - Retrying in 5 seconds...")
                     time.sleep(5)
             finally:
@@ -192,14 +230,42 @@ class SensorGUI:
         ts, voltage = self.latest_data['Vbat']
         return f"Timestamp: {ts}, Voltage: {voltage:.2f}"
 
-    def on_send(self):
-        cmd = self.command_entry.get()
-        if cmd and self.sock:
-            try:
-                self.sock.send(cmd.encode() + b'\n')
-                self.command_entry.delete(0, tk.END)
-            except Exception as e:
-                self.status_label.config(text=f"Send error: {e}")
+    def toggle_control(self):
+        self.control_active = not self.control_active
+        if self.control_active:
+            self.control_button.config(text="Control Target: ON")
+            self.autonomous_active = False
+            self.autonomous_button.config(text="Autonomous Mode: OFF")
+            self.set_sliders_state('normal')
+        else:
+            self.control_button.config(text="Control Target: OFF")
+            self.set_sliders_state('disabled')
+
+    def toggle_autonomous(self):
+        if self.control_active:
+            return  # Cannot activate autonomous if control is active
+        self.autonomous_active = not self.autonomous_active
+        if self.autonomous_active:
+            self.autonomous_button.config(text="Autonomous Mode: ON")
+        else:
+            self.autonomous_button.config(text="Autonomous Mode: OFF")
+
+    def set_sliders_state(self, state):
+        self.r_scale.config(state=state)
+        self.m_scale.config(state=state)
+        self.t_scale.config(state=state)
+
+    def serialize_event(self, event):
+        sensor_type, *data = event
+        tag = EVENT_TAGS.get(sensor_type)
+        if tag is None:
+            raise ValueError("Unknown event type")
+        ts = data[0]
+        if sensor_type == 'WifiControl':
+            mode, r, m, t = data[1:]
+            return struct.pack('<BQBfff', tag, ts, mode, r, m, t)
+        else:
+            raise ValueError("Serialization only implemented for WifiControl")
 
     def update_gui(self):
         # Process all queued events
@@ -225,6 +291,28 @@ class SensorGUI:
         self.accel_label.config(text=self.format_accel())
         self.receiver_label.config(text=self.format_receiver())
         self.vbat_label.config(text=self.format_vbat())
+        
+        # Send WifiControl event if connected
+        if self.sock:
+            ts = int(time.time() * 1000000)  # Example timestamp in microseconds; adjust to match Rust ticks if needed
+            if self.control_active:
+                mode = 1
+                r = self.r_var.get()
+                m = self.m_var.get()
+                t = self.t_var.get()
+            elif self.autonomous_active:
+                mode = 2
+                r = m = t = 0.0
+            else:
+                mode = 0
+                r = m = t = 0.0
+            event = ('WifiControl', ts, mode, r, m, t)
+            try:
+                serialized = self.serialize_event(event)
+                self.sock.sendall(serialized)
+            except Exception as e:
+                print(f"Send error: {e}")
+                status_queue.put(f"Send error: {e}")
         
         # Schedule next update
         self.root.after(100, self.update_gui)

@@ -50,6 +50,8 @@ extern crate alloc;
 mod sensors;
 mod shared;
 
+use shared::kasari;
+
 const SSID: &str = env!("SSID");
 const PASSWORD: &str = env!("PASSWORD");
 
@@ -312,13 +314,19 @@ async fn main(spawner: Spawner) {
         logic.step();
 
         if let Some(ref plan) = logic.motor_control_plan {
-            let target_speed_percent = plan.throttle;
-            let duty = target_speed_to_pwm_duty(target_speed_percent, 2u32.pow(8));
-            if shared::LOG_RECEIVER {
-                esp_println::println!("Setting duty cycle: {:?}", duty);
+		    let timestamp = embassy_time::Instant::now().as_ticks();
+		    if timestamp - plan.timestamp < 2000 {
+                let target_speed_percent = plan.throttle;
+                let duty = target_speed_to_pwm_duty(target_speed_percent, 2u32.pow(8));
+                if shared::LOG_RECEIVER {
+                    esp_println::println!("Setting duty cycle: {:?}", duty);
+                }
+                _ = channel0.set_duty_hw(duty);
+                _ = channel1.set_duty_hw(duty);
+            } else {
+                _ = channel0.set_duty(0);
+                _ = channel1.set_duty(0);
             }
-            _ = channel0.set_duty_hw(duty);
-            _ = channel1.set_duty_hw(duty);
         } else {
             _ = channel0.set_duty(0);
             _ = channel1.set_duty(0);
@@ -364,46 +372,6 @@ async fn net_task(mut runner: Runner<'static, WifiDevice<'static>>) {
     runner.run().await
 }
 
-use alloc::vec::Vec;
-use crate::shared::kasari::InputEvent; 
-
-fn serialize_event(event: &InputEvent) -> Vec<u8> {
-    let mut buf = Vec::new();
-    match event {
-        InputEvent::Lidar(timestamp, d1, d2, d3, d4) => {
-            buf.push(0); // Tag for Lidar
-            buf.extend_from_slice(&timestamp.to_le_bytes());
-            buf.extend_from_slice(&d1.to_le_bytes());
-            buf.extend_from_slice(&d2.to_le_bytes());
-            buf.extend_from_slice(&d3.to_le_bytes());
-            buf.extend_from_slice(&d4.to_le_bytes());
-        }
-        InputEvent::Accelerometer(timestamp, acceleration_y, acceleration_z) => {
-            buf.push(1); // Tag for Accelerometer
-            buf.extend_from_slice(&timestamp.to_le_bytes());
-            buf.extend_from_slice(&acceleration_y.to_le_bytes());
-            buf.extend_from_slice(&acceleration_z.to_le_bytes());
-        }
-        InputEvent::Receiver(timestamp, channel, pulse_length) => {
-            buf.push(2); // Tag for Receiver
-            buf.extend_from_slice(&timestamp.to_le_bytes());
-            buf.push(*channel);
-            if let Some(pl) = pulse_length {
-                buf.push(1); // Flag: pulse_length present
-                buf.extend_from_slice(&pl.to_le_bytes());
-            } else {
-                buf.push(0); // Flag: pulse_length absent
-            }
-        }
-        InputEvent::Vbat(timestamp, voltage) => {
-            buf.push(3); // Tag for Vbat
-            buf.extend_from_slice(&timestamp.to_le_bytes());
-            buf.extend_from_slice(&voltage.to_le_bytes());
-        }
-    }
-    buf
-}
-
 use crate::shared::EventChannel;
 use embassy_futures::select::{select, Either};
 use embedded_io_async::{Read, Write};
@@ -411,6 +379,7 @@ use embedded_io_async::{Read, Write};
 #[embassy_executor::task]
 async fn listener_task(ap_stack: embassy_net::Stack<'static>, sta_stack: embassy_net::Stack<'static>, event_channel: &'static EventChannel) {
     let mut subscriber = event_channel.subscriber().unwrap();
+    let mut publisher = event_channel.publisher().unwrap();
 
     let mut ap_rx_buffer = [0; 1536];
     let mut ap_tx_buffer = [0; 1536];
@@ -449,7 +418,7 @@ async fn listener_task(ap_stack: embassy_net::Stack<'static>, sta_stack: embassy
 
             match select(read_fut, event_fut).await {
                 Either::Second(event) => {
-                    let serialized = serialize_event(&event);
+                    let serialized = kasari::serialize_event(&event);
                     if let Err(e) = socket.write_all(&serialized).await {
                         println!("Write error: {:?}", e);
                         break;
@@ -464,27 +433,37 @@ async fn listener_task(ap_stack: embassy_net::Stack<'static>, sta_stack: embassy
                     break;
                 }
                 Either::First(Ok(len)) => {
-                    println!("Received {} bytes", len);
                     rx_pos += len;
-                    // Process complete lines
-                    while let Some(nl_pos) = rx_buffer[..rx_pos].iter().position(|&b| b == b'\n') {
-                        let mut line = &rx_buffer[0..nl_pos];
-                        if line.ends_with(b"\r") {
-                            line = &line[..line.len() - 1];
-                        }
-                        if let Ok(cmd) = core::str::from_utf8(line) {
-                            println!("Received command: {}", cmd);
-                            // TODO: Process the command as needed
+                    // Process binary events
+                    while rx_pos >= 1 {
+                        let tag = rx_buffer[0];
+                        if tag == 4 {  // Assuming tag 4 for WifiControl
+                            if rx_pos >= 1 + 8 + 1 + 4 + 4 + 4 {  // u8 tag + u64 ts + u8 mode + 3*f32
+                                let ts = u64::from_le_bytes(rx_buffer[1..9].try_into().unwrap());
+                                let mode = rx_buffer[9];
+                                let r = f32::from_le_bytes(rx_buffer[10..14].try_into().unwrap());
+                                let m = f32::from_le_bytes(rx_buffer[14..18].try_into().unwrap());
+                                let t = f32::from_le_bytes(rx_buffer[18..22].try_into().unwrap());
+                                publisher.publish_immediate(
+                                    shared::kasari::InputEvent::WifiControl(ts, mode, r, m, t)
+                                );
+                                // Shift buffer
+                                let shift_len = 22;
+                                rx_buffer.copy_within(shift_len.., 0);
+                                rx_pos -= shift_len;
+                            } else {
+                                break;
+                            }
                         } else {
-                            println!("Received invalid UTF-8 command");
+                            // Unknown tag, skip or handle error
+                            println!("Unknown tag: {}", tag);
+                            // Shift by 1 to skip invalid tag
+                         rx_buffer.copy_within(1.., 0);
+                            rx_pos -= 1;
                         }
-                        // Shift buffer
-                        let shift_len = nl_pos + 1;
-                        rx_buffer.copy_within(shift_len.., 0);
-                        rx_pos -= shift_len;
                     }
                     if rx_pos == rx_buffer.len() {
-                        println!("Command buffer full without newline, dropping data");
+                        println!("Buffer full without complete event, dropping data");
                         rx_pos = 0;
                     }
                 }

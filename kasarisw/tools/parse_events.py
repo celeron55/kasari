@@ -43,6 +43,13 @@ def parse_event(buffer):
         timestamp, voltage = struct.unpack('<Qf', data)
         return ('Vbat', timestamp, voltage), buffer[13:]
     
+    elif tag == 4:  # WifiControl
+        if len(buffer) < 22:
+            return None, buffer
+        data = buffer[1:22]
+        timestamp, mode, r, m, t = struct.unpack('<QBfff', data)
+        return ('WifiControl', timestamp, mode, r, m, t), buffer[22:]
+    
     else:
         # Unknown tag, skip 1 byte
         return None, buffer[1:]
