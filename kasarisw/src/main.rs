@@ -39,13 +39,12 @@ use esp_wifi::{
         ClientConfiguration,
         Configuration,
         WifiController,
-        WifiDevice,
         WifiEvent,
         WifiState,
     },
 };
-use embassy_futures::select::Either;
 use embassy_sync::pubsub::PubSubChannel;
+use esp_wifi::wifi::WifiDevice;
 extern crate alloc;
 
 mod sensors;
@@ -266,9 +265,8 @@ async fn main(spawner: Spawner) {
         }
         Timer::after(Duration::from_millis(500)).await;
     }
-    println!("Connect to the AP `esp-wifi` and point your browser to http://192.168.2.1:8080/");
-    println!("Use a static IP in the range 192.168.2.2 .. 192.168.2.255, use gateway 192.168.2.1");
-    println!("Or connect to the ap `{SSID}` and point your browser to http://{sta_address}:8080/");
+    println!("Connect to the AP `esp-wifi` and connect to TCP 192.168.2.1:8080");
+    println!("Or connect to the ap `{SSID}` and connect to TCP {sta_address}:8080");
 
     spawner.spawn(listener_task(ap_stack, sta_stack, event_channel)).ok();
 
@@ -299,12 +297,12 @@ async fn main(spawner: Spawner) {
 				esp_println::println!("vbat_raw: {:?}, vbat: {:?} V", vbat_raw, vbat);
 			}
 
-			publisher.publish(
+			publisher.publish_immediate(
 				shared::kasari::InputEvent::Vbat(
 					embassy_time::Instant::now().as_ticks(),
 					vbat,
 				)
-			).await;
+			);
 		}
 
 		while let Some(event) = subscriber.try_next_message_pure() {
@@ -407,113 +405,57 @@ fn serialize_event(event: &InputEvent) -> Vec<u8> {
 }
 
 use crate::shared::EventChannel;
-use embedded_io_async::Write;
+use embassy_futures::select::{select, Either};
+use embedded_io_async::{Read, Write};
 
 #[embassy_executor::task]
 async fn listener_task(ap_stack: embassy_net::Stack<'static>, sta_stack: embassy_net::Stack<'static>, event_channel: &'static EventChannel) {
-	use embassy_futures::select::{select, Either};
+    let mut subscriber = event_channel.subscriber().unwrap();
 
-	let mut subscriber = event_channel.subscriber().unwrap();
+    let mut ap_rx_buffer = [0; 1536];
+    let mut ap_tx_buffer = [0; 1536];
+    let mut sta_rx_buffer = [0; 1536];
+    let mut sta_tx_buffer = [0; 1536];
 
-    let mut ap_server_rx_buffer = [0; 1536];
-    let mut ap_server_tx_buffer = [0; 1536];
-    let mut sta_server_rx_buffer = [0; 1536];
-    let mut sta_server_tx_buffer = [0; 1536];
-    let mut sta_client_rx_buffer = [0; 1536];
-    let mut sta_client_tx_buffer = [0; 1536];
-
-    let mut ap_server_socket =
-        TcpSocket::new(ap_stack, &mut ap_server_rx_buffer, &mut ap_server_tx_buffer);
-    ap_server_socket.set_timeout(Some(embassy_time::Duration::from_secs(10)));
-
-    let mut sta_server_socket = TcpSocket::new(
-        sta_stack,
-        &mut sta_server_rx_buffer,
-        &mut sta_server_tx_buffer,
-    );
-    sta_server_socket.set_timeout(Some(embassy_time::Duration::from_secs(10)));
-
-    let mut sta_client_socket = TcpSocket::new(
-        sta_stack,
-        &mut sta_client_rx_buffer,
-        &mut sta_client_tx_buffer,
-    );
-    sta_client_socket.set_timeout(Some(embassy_time::Duration::from_secs(10)));
+    let mut ap_socket = TcpSocket::new(ap_stack, &mut ap_rx_buffer, &mut ap_tx_buffer);
+    let mut sta_socket = TcpSocket::new(sta_stack, &mut sta_rx_buffer, &mut sta_tx_buffer);
 
     loop {
         println!("Wait for connection...");
-        // FIXME: If connections are attempted on both sockets at the same time, we
-        // might end up dropping one of them. Might be better to spawn both
-        // accept() calls, or use fused futures? Note that we only attempt to
-        // serve one connection at a time, so we don't run out of ram.
-        let either_socket = embassy_futures::select::select(
-            ap_server_socket.accept(IpListenEndpoint {
-                addr: None,
-                port: 8080,
-            }),
-            sta_server_socket.accept(IpListenEndpoint {
-                addr: None,
-                port: 8080,
-            }),
-        )
-        .await;
-        let (r, socket) = match either_socket {
-            Either::First(r) => (r, &mut ap_server_socket),
-            Either::Second(r) => (r, &mut sta_server_socket),
+        let either = select(
+            ap_socket.accept(IpListenEndpoint { addr: None, port: 8080 }),
+            sta_socket.accept(IpListenEndpoint { addr: None, port: 8080 }),
+        ).await;
+
+        let (r, mut socket) = match either {
+            Either::First(r) => (r, &mut ap_socket),
+            Either::Second(r) => (r, &mut sta_socket),
         };
-        println!("Connected!");
 
-        // Step 1: Read the HTTP request until the end of headers
-        let mut buffer = [0u8; 1024];
-        let mut pos = 0;
-        loop {
-            match socket.read(&mut buffer[pos..]).await {
-                Ok(0) => {
-                    println!("Client disconnected before sending request");
-                    break;
-                }
-                Ok(len) => {
-                    pos += len;
-                    if buffer[..pos].windows(4).any(|window| window == b"\r\n\r\n") {
-                        break;
-                    }
-                }
-                Err(e) => {
-                    println!("Read error: {:?}", e);
-                    break;
-                }
-            }
-        }
-
-        // Step 2: Send HTTP headers with binary MIME type and chunked encoding
-        let headers = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Type: application/octet-stream\r\n\r\n";
-        if let Err(e) = socket.write_all(headers.as_bytes()).await {
-            println!("Write error: {:?}", e);
+        if let Err(e) = r {
+            println!("Accept error: {:?}", e);
             continue;
         }
 
-        // Step 3: Stream binary data indefinitely
-        loop {
-            let event_future = subscriber.next_message_pure();
-            let mut dummy_buf = [0; 1];
-            let read_future = socket.read(&mut dummy_buf); // Dummy read to detect disconnect
+        println!("Connected!");
+        socket.set_timeout(None);
 
-            match select(event_future, read_future).await {
+        let mut rx_buffer = [0u8; 512];
+        let mut rx_pos = 0;
+
+        loop {
+            let event_fut = subscriber.next_message_pure();
+            let read_fut = socket.read(&mut rx_buffer[rx_pos..]);
+
+            match select(event_fut, read_fut).await {
                 Either::First(event) => {
-                    // Serialize the event into binary format
                     let serialized = serialize_event(&event);
-                    // Format chunk: size in hex, followed by data
-                    let size_hex = alloc::format!("{:x}\r\n", serialized.len());
-                    if let Err(e) = socket.write_all(size_hex.as_bytes()).await {
-                        println!("Write error: {:?}", e);
-                        break;
-                    }
                     if let Err(e) = socket.write_all(&serialized).await {
                         println!("Write error: {:?}", e);
                         break;
                     }
-                    if let Err(e) = socket.write_all(b"\r\n").await {
-                        println!("Write error: {:?}", e);
+                    if let Err(e) = socket.flush().await {
+                        println!("Flush error: {:?}", e);
                         break;
                     }
                 }
@@ -521,15 +463,37 @@ async fn listener_task(ap_stack: embassy_net::Stack<'static>, sta_stack: embassy
                     println!("Client disconnected");
                     break;
                 }
+                Either::Second(Ok(len)) => {
+                    rx_pos += len;
+                    // Process complete lines
+                    while let Some(nl_pos) = rx_buffer[..rx_pos].iter().position(|&b| b == b'\n') {
+                        let mut line = &rx_buffer[0..nl_pos];
+                        if line.ends_with(b"\r") {
+                            line = &line[..line.len() - 1];
+                        }
+                        if let Ok(cmd) = core::str::from_utf8(line) {
+                            println!("Received command: {}", cmd);
+                            // TODO: Process the command as needed
+                        } else {
+                            println!("Received invalid UTF-8 command");
+                        }
+                        // Shift buffer
+                        let shift_len = nl_pos + 1;
+                        rx_buffer.copy_within(shift_len.., 0);
+                        rx_pos -= shift_len;
+                    }
+                    if rx_pos == rx_buffer.len() {
+                        println!("Command buffer full without newline, dropping data");
+                        rx_pos = 0;
+                    }
+                }
                 Either::Second(Err(e)) => {
                     println!("Read error: {:?}", e);
                     break;
                 }
-                _ => {}
             }
         }
 
-        // Clean up connection
         socket.close();
         Timer::after(Duration::from_millis(1000)).await;
         socket.abort();

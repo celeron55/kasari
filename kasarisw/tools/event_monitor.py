@@ -1,4 +1,4 @@
-import requests
+import socket
 import struct
 import tkinter as tk
 from tkinter import ttk
@@ -27,10 +27,10 @@ class SensorGUI:
         self.latest_data = defaultdict(lambda: "No data yet")
         
         # Connection management
-        self.url = "http://192.168.1.248:8080"  # Default URL
+        self.host_port = "192.168.1.248:8080"  # Default host:port
         self.running = False
         self.thread = None
-        self.response = None
+        self.sock = None
         
         # Create widgets
         self.create_widgets()
@@ -84,6 +84,13 @@ class SensorGUI:
         ttk.Label(self.frame, text="Vbat:").grid(row=8, column=0, sticky=tk.W)
         self.vbat_label = ttk.Label(self.frame, text=self.format_vbat())
         self.vbat_label.grid(row=9, column=0, columnspan=3, sticky=tk.W)
+        
+        # Command section
+        ttk.Label(self.frame, text="Command:").grid(row=10, column=0, sticky=tk.W)
+        self.command_entry = ttk.Entry(self.frame)
+        self.command_entry.grid(row=10, column=1, sticky=tk.W)
+        self.send_button = ttk.Button(self.frame, text="Send", command=self.on_send)
+        self.send_button.grid(row=10, column=2, sticky=tk.W)
 
     def on_resize(self, event):
         # Update wraplength based on current frame width
@@ -102,8 +109,9 @@ class SensorGUI:
             self.disconnect()
 
     def connect(self):
-        host_port = self.host_entry.get()
-        self.url = f"http://{host_port}"
+        self.host_port = self.host_entry.get()
+        self.host, port_str = self.host_port.split(':')
+        self.port = int(port_str)
         self.status_label.config(text="Status: Connecting...")
         status_queue.put("Connecting...")
         self.running = True
@@ -113,12 +121,12 @@ class SensorGUI:
 
     def disconnect(self):
         self.running = False
-        if self.response:
+        if self.sock:
             try:
-                self.response.close()
+                self.sock.close()
             except:
                 pass
-            self.response = None
+            self.sock = None
         self.status_label.config(text="Status: Disconnected")
         status_queue.put("Disconnected")
         self.connect_button.config(text="Connect")
@@ -126,35 +134,36 @@ class SensorGUI:
     def streaming(self):
         while self.running:
             try:
-                self.response = requests.get(self.url, stream=True, timeout=(5, 10))
-                if self.response.status_code != 200:
-                    raise ValueError(f"HTTP status: {self.response.status_code}")
+                self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                self.sock.settimeout(10)
+                self.sock.connect((self.host, self.port))
+                self.sock.settimeout(None)
                 status_queue.put("Connected")
                 buffer = b''
-                for chunk in self.response.iter_content(chunk_size=1024):
-                    if not self.running:
-                        break
-                    if chunk:
-                        buffer += chunk
-                        while len(buffer) >= 1:
-                            old_len = len(buffer)
-                            event, buffer = parse_event(buffer)
-                            if event is not None:
-                                event_queue.put(event)
-                            else:
-                                if len(buffer) >= old_len:
-                                    break
+                while self.running:
+                    chunk = self.sock.recv(1024)
+                    if not chunk:
+                        raise EOFError("Connection closed by server")
+                    buffer += chunk
+                    while len(buffer) >= 1:
+                        old_len = len(buffer)
+                        event, buffer = parse_event(buffer)
+                        if event is not None:
+                            event_queue.put(event)
+                        else:
+                            if len(buffer) >= old_len:
+                                break
             except Exception as e:
                 if self.running:
                     status_queue.put(f"Error: {str(e)} - Retrying in 5 seconds...")
                     time.sleep(5)
             finally:
-                if self.response:
+                if self.sock:
                     try:
-                        self.response.close()
+                        self.sock.close()
                     except:
                         pass
-                    self.response = None
+                    self.sock = None
 
     def format_lidar(self):
         if self.latest_data['Lidar'] == "No data yet":
@@ -166,7 +175,7 @@ class SensorGUI:
         if self.latest_data['Accelerometer'] == "No data yet":
             return "No data yet"
         ts, accel_y, accel_z = self.latest_data['Accelerometer']
-        return f"Timestamp: {ts}, Acceleration Y: {accel_y:.2f}, Z:  {accel_z:.2f}"
+        return f"Timestamp: {ts}, Acceleration Y: {accel_y:.2f}, Z: {accel_z:.2f}"
 
     def format_receiver(self):
         if self.latest_data['Receiver'] == "No data yet":
@@ -182,6 +191,15 @@ class SensorGUI:
             return "No data yet"
         ts, voltage = self.latest_data['Vbat']
         return f"Timestamp: {ts}, Voltage: {voltage:.2f}"
+
+    def on_send(self):
+        cmd = self.command_entry.get()
+        if cmd and self.sock:
+            try:
+                self.sock.send(cmd.encode() + b'\n')
+                self.command_entry.delete(0, tk.END)
+            except Exception as e:
+                self.status_label.config(text=f"Send error: {e}")
 
     def update_gui(self):
         # Process all queued events

@@ -91,7 +91,7 @@ pub async fn lidar_reader(
 							parsed.distances[2] as f32,
 							parsed.distances[3] as f32,
 						);
-						publisher.publish(event).await;
+						publisher.publish_immediate(event);
 
                         log_i += 1;
                         if log_i % 20 == 1 && LOG_LIDAR {
@@ -186,7 +186,7 @@ pub async fn accelerometer_task(mut spi: Spi<'static, esp_hal::Blocking>, event_
 
 		let timestamp = embassy_time::Instant::now().as_ticks();
 		let event = InputEvent::Accelerometer(timestamp, -y_g, -z_g);
-		publisher.publish(event).await;
+		publisher.publish_immediate(event);
 
         Timer::after_millis(10).await;
     }
@@ -226,6 +226,6 @@ pub async fn rmt_task(mut ch0: Channel<Async, 0>, event_channel: &'static EventC
 
 		let timestamp = embassy_time::Instant::now().as_ticks();
 		let event = InputEvent::Receiver(timestamp, 0, ch0_final_result);
-		publisher.publish(event).await;
+		publisher.publish_immediate(event);
     }
 }

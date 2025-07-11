@@ -10,7 +10,7 @@ pub const LOG_LIDAR: bool = false;
 pub const LOG_RECEIVER: bool = false;
 pub const LOG_VBAT: bool = false;
 
-pub type EventChannel = PubSubChannel<CriticalSectionRawMutex, kasari::InputEvent, 16, 2, 6>;
+pub type EventChannel = PubSubChannel<CriticalSectionRawMutex, kasari::InputEvent, 64, 2, 6>;
 pub static EVENT_CHANNEL: StaticCell<EventChannel> = StaticCell::new();
 
 pub mod kasari {
