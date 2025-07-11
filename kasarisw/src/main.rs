@@ -444,11 +444,11 @@ async fn listener_task(ap_stack: embassy_net::Stack<'static>, sta_stack: embassy
         let mut rx_pos = 0;
 
         loop {
-            let event_fut = subscriber.next_message_pure();
             let read_fut = socket.read(&mut rx_buffer[rx_pos..]);
+            let event_fut = subscriber.next_message_pure();
 
-            match select(event_fut, read_fut).await {
-                Either::First(event) => {
+            match select(read_fut, event_fut).await {
+                Either::Second(event) => {
                     let serialized = serialize_event(&event);
                     if let Err(e) = socket.write_all(&serialized).await {
                         println!("Write error: {:?}", e);
@@ -459,11 +459,11 @@ async fn listener_task(ap_stack: embassy_net::Stack<'static>, sta_stack: embassy
                         break;
                     }
                 }
-                Either::Second(Ok(0)) => {
+                Either::First(Ok(0)) => {
                     println!("Client disconnected");
                     break;
                 }
-                Either::Second(Ok(len)) => {
+                Either::First(Ok(len)) => {
                     println!("Received {} bytes", len);
                     rx_pos += len;
                     // Process complete lines
@@ -488,7 +488,7 @@ async fn listener_task(ap_stack: embassy_net::Stack<'static>, sta_stack: embassy
                         rx_pos = 0;
                     }
                 }
-                Either::Second(Err(e)) => {
+                Either::First(Err(e)) => {
                     println!("Read error: {:?}", e);
                     break;
                 }
