@@ -275,7 +275,7 @@ async fn main(spawner: Spawner) {
     let signal = &*SIGNAL.init(embassy_sync::signal::Signal::new());
 
     spawner.spawn(sensors::lidar_reader(rx, signal, event_channel)).ok();
-    spawner.spawn(sensors::lidar_writer(tx, signal)).ok();
+    //spawner.spawn(sensors::lidar_writer(tx, signal)).ok();
     spawner.spawn(encoder_emulation_task(encoder_emulation_output_pinmap)).ok();
     spawner.spawn(sensors::accelerometer_task(spi, event_channel)).ok();
     spawner.spawn(sensors::rmt_task(rmt_ch0, event_channel)).ok();
@@ -464,6 +464,7 @@ async fn listener_task(ap_stack: embassy_net::Stack<'static>, sta_stack: embassy
                     break;
                 }
                 Either::Second(Ok(len)) => {
+                    println!("Received {} bytes", len);
                     rx_pos += len;
                     // Process complete lines
                     while let Some(nl_pos) = rx_buffer[..rx_pos].iter().position(|&b| b == b'\n') {
