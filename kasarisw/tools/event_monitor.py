@@ -7,6 +7,9 @@ import time
 from collections import defaultdict
 import queue
 from parse_events import parse_event
+import json
+import os
+from datetime import datetime
 
 # Shared queues for events and status (thread-safe)
 event_queue = queue.Queue()
@@ -26,7 +29,7 @@ class SensorGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("Sensor Data Monitor")
-        self.root.geometry("1000x700")
+        self.root.geometry("1000x600")
         
         # Make the root grid expandable
         self.root.rowconfigure(0, weight=1)
@@ -49,6 +52,12 @@ class SensorGUI:
         self.r_var = tk.DoubleVar(value=0.0)
         self.m_var = tk.DoubleVar(value=0.0)
         self.t_var = tk.DoubleVar(value=0.0)
+        
+        # Log file
+        os.makedirs('log', exist_ok=True)
+        timestamp = datetime.now().strftime('%Y-%m-%d_%H%M%S')
+        log_path = f"./log/kasarisw_{timestamp}.log"
+        self.log_file = open(log_path, 'w')
         
         # Create widgets
         self.create_widgets()
@@ -187,12 +196,14 @@ class SensorGUI:
                         event, buffer = parse_event(buffer)
                         if event is not None:
                             event_queue.put(event)
+                            json.dump(event, self.log_file)
+                            self.log_file.write('\n')
+                            self.log_file.flush()
                         else:
                             if len(buffer) >= old_len:
                                 break
             except Exception as e:
                 if self.running:
-                    print(f"Error: {str(e)} - Retrying in 5 seconds...")
                     status_queue.put(f"Error: {str(e)} - Retrying in 5 seconds...")
                     time.sleep(5)
             finally:
@@ -311,7 +322,6 @@ class SensorGUI:
                 serialized = self.serialize_event(event)
                 self.sock.sendall(serialized)
             except Exception as e:
-                print(f"Send error: {e}")
                 status_queue.put(f"Send error: {e}")
         
         # Schedule next update
