@@ -1,58 +1,58 @@
 import sys
 import struct
 
+TAG_XOR = 0x5555
+
 def parse_event(buffer):
     """Parse a single event from the buffer, returning the event and remaining buffer."""
-    if len(buffer) < 1:
+    if len(buffer) < 2:  # Min for tag
         return None, buffer
-    tag = buffer[0]
+    encoded_tag = struct.unpack('<H', buffer[0:2])[0]
+    tag = encoded_tag ^ TAG_XOR
     
-    if tag == 0:  # Lidar
-        if len(buffer) < 25:
+    if tag == 0:  # Lidar: 2 (tag) + 8 (ts) + 16 (4*f32) = 26 bytes
+        if len(buffer) < 26:
             return None, buffer
-        data = buffer[1:25]
-        timestamp, d1, d2, d3, d4 = struct.unpack('<Qffff', data)
-        return ('Lidar', timestamp, d1, d2, d3, d4), buffer[25:]
+        timestamp, d1, d2, d3, d4 = struct.unpack('<Qffff', buffer[2:26])
+        return ('Lidar', timestamp, d1, d2, d3, d4), buffer[26:]
     
-    elif tag == 1:  # Accelerometer
-        if len(buffer) < 17:
+    elif tag == 1:  # Accelerometer: 2 + 8 + 8 = 18 bytes
+        if len(buffer) < 18:
             return None, buffer
-        data = buffer[1:17]
-        timestamp, acceleration_y, acceleration_z = struct.unpack('<Qff', data)
-        return ('Accelerometer', timestamp, acceleration_y, acceleration_z), buffer[17:]
+        timestamp, acceleration_y, acceleration_z = struct.unpack('<Qff', buffer[2:18])
+        return ('Accelerometer', timestamp, acceleration_y, acceleration_z), buffer[18:]
     
-    elif tag == 2:  # Receiver
-        if len(buffer) < 11:
+    elif tag == 2:  # Receiver: Min 2 + 8 + 1 + 1 = 12 bytes; +4 if flag==1
+        if len(buffer) < 12:
             return None, buffer
-        timestamp, channel, flag = struct.unpack('<QBB', buffer[1:11])
+        timestamp, channel, flag = struct.unpack('<QBB', buffer[2:12])
         if flag == 0:
-            return ('Receiver', timestamp, channel, None), buffer[11:]
+            return ('Receiver', timestamp, channel, None), buffer[12:]
         elif flag == 1:
-            if len(buffer) < 15:
+            if len(buffer) < 16:
                 return None, buffer
-            pulse_length = struct.unpack('<f', buffer[11:15])[0]
-            return ('Receiver', timestamp, channel, pulse_length), buffer[15:]
+            pulse_length = struct.unpack('<f', buffer[12:16])[0]
+            return ('Receiver', timestamp, channel, pulse_length), buffer[16:]
         else:
-            # Invalid flag, skip min event size (tag + 10 bytes)
-            return None, buffer[11:]
+            # Invalid flag: skip 1 byte to slide
+            print(f"Invalid Receiver flag: {flag:02x}", file=sys.stderr)
+            return None, buffer[1:]
     
-    elif tag == 3:  # Vbat
-        if len(buffer) < 13:
+    elif tag == 3:  # Vbat: 2 + 8 + 4 = 14 bytes
+        if len(buffer) < 14:
             return None, buffer
-        data = buffer[1:13]
-        timestamp, voltage = struct.unpack('<Qf', data)
-        return ('Vbat', timestamp, voltage), buffer[13:]
+        timestamp, voltage = struct.unpack('<Qf', buffer[2:14])
+        return ('Vbat', timestamp, voltage), buffer[14:]
     
-    elif tag == 4:  # WifiControl
-        if len(buffer) < 22:
+    elif tag == 4:  # WifiControl: 2 + 8 + 1 + 12 (3*f32) = 23 bytes
+        if len(buffer) < 23:
             return None, buffer
-        data = buffer[1:22]
-        timestamp, mode, r, m, t = struct.unpack('<QBfff', data)
-        return ('WifiControl', timestamp, mode, r, m, t), buffer[22:]
+        timestamp, mode, r, m, t = struct.unpack('<QBfff', buffer[2:23])
+        return ('WifiControl', timestamp, mode, r, m, t), buffer[23:]
     
     else:
-        # Unknown tag, skip 1 byte
-        print(f"Skipped byte: {tag:02x}", file=sys.stderr)  # Log invalid tag
+        # Invalid tag: skip 1 byte to slide/resync
+        print(f"Skipped byte (invalid tag peek): {buffer[0]:02x}", file=sys.stderr)
         return None, buffer[1:]
 
 # Main entry point

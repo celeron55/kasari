@@ -135,42 +135,53 @@ pub mod kasari {
         pub fn step(&mut self) {}
     }
 
+	const TAG_XOR: u16 = 0x5555;
+
 	pub fn serialize_event(event: &InputEvent) -> Vec<u8> {
-		let mut buf = Vec::new();
+		let mut buf = Vec::with_capacity(32);
 		match event {
-			InputEvent::Lidar(timestamp, d1, d2, d3, d4) => {
-				buf.push(0); // Tag for Lidar
-				buf.extend_from_slice(&timestamp.to_le_bytes());
+			InputEvent::Lidar(ts, d1, d2, d3, d4) => {
+				let tag = (0u16 ^ TAG_XOR).to_le_bytes();
+				buf.extend_from_slice(&tag);
+				buf.extend_from_slice(&ts.to_le_bytes());
 				buf.extend_from_slice(&d1.to_le_bytes());
 				buf.extend_from_slice(&d2.to_le_bytes());
 				buf.extend_from_slice(&d3.to_le_bytes());
 				buf.extend_from_slice(&d4.to_le_bytes());
 			}
-			InputEvent::Accelerometer(timestamp, acceleration_y, acceleration_z) => {
-				buf.push(1); // Tag for Accelerometer
-				buf.extend_from_slice(&timestamp.to_le_bytes());
-				buf.extend_from_slice(&acceleration_y.to_le_bytes());
-				buf.extend_from_slice(&acceleration_z.to_le_bytes());
+			InputEvent::Accelerometer(ts, accel_y, accel_z) => {
+				let tag = (1u16 ^ TAG_XOR).to_le_bytes();
+				buf.extend_from_slice(&tag);
+				buf.extend_from_slice(&ts.to_le_bytes());
+				buf.extend_from_slice(&accel_y.to_le_bytes());
+				buf.extend_from_slice(&accel_z.to_le_bytes());
 			}
-			InputEvent::Receiver(timestamp, channel, pulse_length) => {
-				buf.push(2); // Tag for Receiver
-				buf.extend_from_slice(&timestamp.to_le_bytes());
+			InputEvent::Receiver(ts, channel, pulse_length) => {
+				let tag = (2u16 ^ TAG_XOR).to_le_bytes();
+				buf.extend_from_slice(&tag);
+				buf.extend_from_slice(&ts.to_le_bytes());
 				buf.push(*channel);
-				if let Some(pl) = pulse_length {
-					buf.push(1); // Flag: pulse_length present
-					buf.extend_from_slice(&pl.to_le_bytes());
-				} else {
-					buf.push(0); // Flag: pulse_length absent
+				match pulse_length {
+					Some(pl) => {
+						buf.push(1);  // Flag 1
+						buf.extend_from_slice(&pl.to_le_bytes());
+					}
+					None => {
+						buf.push(0);  // Flag 0
+					}
 				}
 			}
-			InputEvent::Vbat(timestamp, voltage) => {
-				buf.push(3); // Tag for Vbat
-				buf.extend_from_slice(&timestamp.to_le_bytes());
+			InputEvent::Vbat(ts, voltage) => {
+				let tag = (3u16 ^ TAG_XOR).to_le_bytes();
+				buf.extend_from_slice(&tag);
+				buf.extend_from_slice(&ts.to_le_bytes());
 				buf.extend_from_slice(&voltage.to_le_bytes());
 			}
-			InputEvent::WifiControl(timestamp, mode, r, m, t) => {
-				buf.push(4); // Tag for Command
-				buf.extend_from_slice(&mode.to_le_bytes());
+			InputEvent::WifiControl(ts, mode, r, m, t) => {
+				let tag = (4u16 ^ TAG_XOR).to_le_bytes();
+				buf.extend_from_slice(&tag);
+				buf.extend_from_slice(&ts.to_le_bytes());
+				buf.push(*mode);
 				buf.extend_from_slice(&r.to_le_bytes());
 				buf.extend_from_slice(&m.to_le_bytes());
 				buf.extend_from_slice(&t.to_le_bytes());
