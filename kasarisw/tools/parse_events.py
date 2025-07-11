@@ -52,6 +52,7 @@ def parse_event(buffer):
     
     else:
         # Unknown tag, skip 1 byte
+        print(f"Skipped byte: {tag:02x}", file=sys.stderr)  # Log invalid tag
         return None, buffer[1:]
 
 # Main entry point
