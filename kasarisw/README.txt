@@ -21,6 +21,4 @@ $ ./monitor.sh
 
 Receiving events from the robot:
 $ python tools/event_monitor.py
-or:
-$ curl 192.168.1.248:8080 | python tools/parse_events.py
 
