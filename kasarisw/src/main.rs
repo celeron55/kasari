@@ -411,6 +411,7 @@ async fn listener_task(ap_stack: embassy_net::Stack<'static>, sta_stack: embassy
 
         let mut rx_buffer = [0u8; 512];
         let mut rx_pos = 0;
+        //let mut serialized_event_count: u32 = 0; // Instrumentation
 
         loop {
             let read_fut = socket.read(&mut rx_buffer[rx_pos..]);
@@ -419,14 +420,16 @@ async fn listener_task(ap_stack: embassy_net::Stack<'static>, sta_stack: embassy
             match select(read_fut, event_fut).await {
                 Either::Second(event) => {
                     let serialized = kasari::serialize_event(&event);
+                    /*serialized_event_count += 1;
+                    if serialized_event_count % 20 == 0 {
+                        println!("-!- serialized_event_count = {}", serialized_event_count);
+                    }*/
                     if let Err(e) = socket.write_all(&serialized).await {
                         println!("Write error: {:?}", e);
                         break;
                     }
-                    if let Err(e) = socket.flush().await {
-                        println!("Flush error: {:?}", e);
-                        break;
-                    }
+                    // Don't flush here. Events are too small and throughput
+                    // will be severely limited.
                 }
                 Either::First(Ok(0)) => {
                     println!("Client disconnected");
@@ -451,6 +454,14 @@ async fn listener_task(ap_stack: embassy_net::Stack<'static>, sta_stack: embassy
                                 let shift_len = 22;
                                 rx_buffer.copy_within(shift_len.., 0);
                                 rx_pos -= shift_len;
+
+                                // Flush the sending socket as we receive valid
+                                // events. This should be a good interval for
+                                // flushing
+                                if let Err(e) = socket.flush().await {
+                                    println!("Flush error: {:?}", e);
+                                    break;
+                                }
                             } else {
                                 break;
                             }
@@ -458,7 +469,7 @@ async fn listener_task(ap_stack: embassy_net::Stack<'static>, sta_stack: embassy
                             // Unknown tag, skip or handle error
                             println!("Unknown tag: {}", tag);
                             // Shift by 1 to skip invalid tag
-                         rx_buffer.copy_within(1.., 0);
+                            rx_buffer.copy_within(1.., 0);
                             rx_pos -= 1;
                         }
                     }

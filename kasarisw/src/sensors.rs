@@ -96,7 +96,7 @@ pub async fn lidar_reader(
                         log_i += 1;
                         if log_i % 20 == 1 && LOG_LIDAR {
                             println!(
-                                "Packet {}: distances=[{}, {}, {}, {}] mm",
+                                "Lidar packet {}: distances=[{}, {}, {}, {}] mm",
                                 log_i,
                                 parsed.distances[0],
                                 parsed.distances[1],
