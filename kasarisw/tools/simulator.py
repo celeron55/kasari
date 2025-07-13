@@ -43,13 +43,8 @@ class RobotSimulator:
         self.CALIBRATION_COUNT = 10
         self.CALIBRATION_MIN_G = -8.0
         self.CALIBRATION_MAX_G = 8.0
-        
-        # Lidar timestamp adjustment
-        self.last_lidar_ts = None
-        self.last_lidar_adjusted_ts = None
-        self.lowpass_interval = 0.0  # in microseconds
-        self.lowpass_alpha = 0.1
-        self.bias_factor = 0.01  # Bias as fraction of lowpass_interval
+
+        self.smoothed_accel_y = 0.0
         
         # Playback controls
         self.mode = 'play'
@@ -163,20 +158,6 @@ class RobotSimulator:
         if event_type == "Lidar":
             if self.debug:
                 print(f"Lidar event at original ts={original_ts}, current theta={self.theta}, last_lidar_theta={self.last_lidar_theta}")
-            if self.last_lidar_ts is not None:
-                actual_delta = original_ts - self.last_lidar_ts
-                if self.lowpass_interval == 0.0:
-                    self.lowpass_interval = actual_delta
-                else:
-                    self.lowpass_interval = self.lowpass_alpha * actual_delta + (1 - self.lowpass_alpha) * self.lowpass_interval
-                bias = self.lowpass_interval * self.bias_factor
-                expected_ts = self.last_lidar_adjusted_ts + self.lowpass_interval - bias
-                ts = expected_ts if expected_ts <= original_ts else original_ts
-                ts = max(ts, self.last_ts)  # Ensure dt >= 0
-                if self.debug:
-                    print(f"Lidar adjustment: actual_delta={actual_delta}, lowpass_interval={self.lowpass_interval}, expected_ts={expected_ts}, adjusted_ts={ts}")
-            self.last_lidar_ts = original_ts
-            self.last_lidar_adjusted_ts = ts
         
         # Calculate time delta (assume ts in microseconds, convert to seconds)
         dt = (ts - self.last_ts) / 1_000_000.0
@@ -190,10 +171,14 @@ class RobotSimulator:
         self.last_ts = ts
         
         if event_type == "Accelerometer":
-            accel_y = event[2]  # Assume Y is the radial acceleration
+            raw_accel_y = event[2]  # Assume Y is the radial acceleration
+            # Apply EMA lowpass filter (alpha=0.1 for smoothing)
+            self.smoothed_accel_y = 0.1 * raw_accel_y + 0.9 * self.smoothed_accel_y
+            accel_y = self.smoothed_accel_y  # Use smoothed value
+
             if not self.calibration_done:
-                if self.CALIBRATION_MIN_G <= accel_y <= self.CALIBRATION_MAX_G:
-                    self.calibration_samples.append(accel_y)
+                if self.CALIBRATION_MIN_G <= raw_accel_y <= self.CALIBRATION_MAX_G:
+                    self.calibration_samples.append(raw_accel_y)
                 if len(self.calibration_samples) >= self.CALIBRATION_COUNT:
                     self.accel_offset = sum(self.calibration_samples) / len(self.calibration_samples)
                     self.calibration_done = True
@@ -276,9 +261,6 @@ class RobotSimulator:
         self.calibration_samples = []
         self.calibration_done = False
         self.last_lidar_theta = 0.0
-        self.last_lidar_ts = None
-        self.last_lidar_adjusted_ts = None
-        self.lowpass_interval = 0.0
         self.mode = 'play'
         self.virtual_elapsed = 0.0
         self.running = True
