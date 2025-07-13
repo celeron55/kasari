@@ -78,8 +78,8 @@ class RobotSimulator:
         self.rotation_arrow = None
         
         # Fixed axis limits
-        self.ax.set_xlim(-1200, 1200)
-        self.ax.set_ylim(-1200, 1200)
+        self.ax.set_xlim(-800, 800)
+        self.ax.set_ylim(-800, 800)
         
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.root)
         self.canvas.draw()
