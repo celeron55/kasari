@@ -6,6 +6,7 @@ import json
 import sys
 import numpy as np
 import argparse
+import matplotlib.patches as patches
 
 class RobotSimulator:
     """
@@ -57,6 +58,9 @@ class RobotSimulator:
         # Heading indicator (line from center)
         self.heading_line, = self.ax.plot([0, math.cos(self.theta) * 200], [0, math.sin(self.theta) * 200],
                                           color='r', linewidth=2)
+        
+        # Rotation direction arrow
+        self.rotation_arrow = None
         
         # Fixed axis limits
         self.ax.set_xlim(-1200, 1200)
@@ -112,7 +116,7 @@ class RobotSimulator:
         original_ts = ts = event[1]
         
         if event_type == "WifiControl":
-            # Skip time/theta update due to different ts base; process if needed in future
+            # Skip time/theta update due to diferent ts base; process if needed in future
             return
         
         if self.last_ts is None:
@@ -192,7 +196,7 @@ class RobotSimulator:
             offsets = np.array(self.points)
             if self.debug:
                 print(f"Drawing {len(offsets)} points, range x: {offsets[:, 0].min():.2f} to {offsets[:, 0].max():.2f}, "
-                      f"y: {offsets[:, 1].min():.2f} to {offsets[:, 1].max():.2f}")
+                      f"y: {offsets[:, 1].mi():.2f} to {offsets[:, 1].max():.2f}")
             self.sc.set_offsets(offsets)
         else:
             self.sc.set_offsets(np.empty((0, 2)))
@@ -203,6 +207,24 @@ class RobotSimulator:
         heading_length = 200  # Fixed length for visibility
         self.heading_line.set_data([0, math.cos(self.theta) * heading_length],
                                    [0, math.sin(self.theta) * heading_length])
+        
+        # Update rotation direction arrow
+        if self.rotation_arrow:
+            self.rotation_arrow.remove()
+            self.rotation_arrow = None
+        
+        if self.rpm != 0:
+            if self.rpm > 0:  # CCW, point left
+                self.rotation_arrow = patches.FancyArrowPatch((200, 1100), (0, 1100),
+                                                              connectionstyle="arc3,rad=0.5",
+                                                              arrowstyle="->", mutation_scale=20,
+                                                              color='black')
+            else:  # CW, point right
+                self.rotation_arrow = patches.FancyArrowPatch((-200, 1100), (0, 1100),
+                                                              connectionstyle="arc3,rad=-0.5",
+                                                              arrowstyle="->", mutation_scale=20,
+                                                              color='black')
+            self.ax.add_patch(self.rotation_arrow)
         
         self.ax.set_title(f"Real-Time Robot LiDAR Simulation\nEvents: {self.event_count}, TS: {self.last_ts // 1000 if self.last_ts else 0} ms, RPM: {self.rpm:.2f}")
         self.fig.canvas.draw()
@@ -223,6 +245,9 @@ class RobotSimulator:
         self.last_lidar_ts = None
         self.last_lidar_adjusted_ts = None
         self.lowpass_interval = 0.0
+        if self.rotation_arrow:
+            self.rotation_arrow.remove()
+            self.rotation_arrow = None
         self.sc.set_offsets(np.empty((0, 2)))
         self.heading_line.set_data([0, 0], [0, 0])  # Hide line initially
         self.ax.set_title("Real-Time Robot LiDAR Simulation\nEvents: 0, TS: 0 ms, RPM: 0.00")
