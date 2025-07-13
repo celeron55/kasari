@@ -44,7 +44,7 @@ class RobotSimulator:
         plt.ion()
         print(f"Matplotlib backend: {plt.get_backend()}")
         self.fig, self.ax = plt.subplots(figsize=(8, 8))
-        self.ax.set_title("Real-Time Robot LiDAR Simulation (Events: 0, TS: 0 ms)")
+        self.ax.set_title("Real-Time Robot LiDAR Simulation\nEvents: 0, TS: 0 ms, RPM: 0.00")
         self.ax.set_xlabel("X (units)")
         self.ax.set_ylabel("Y (units)")
         self.ax.set_aspect('equal')
@@ -194,7 +194,7 @@ class RobotSimulator:
         self.heading_line.set_data([0, math.cos(self.theta) * heading_length],
                                    [0, math.sin(self.theta) * heading_length])
         
-        self.ax.set_title(f"Real-Time Robot LiDAR Simulation (Events: {self.event_count}, TS: {self.last_ts // 1000 if self.last_ts else 0} ms)")
+        self.ax.set_title(f"Real-Time Robot LiDAR Simulation\nEvents: {self.event_count}, TS: {self.last_ts // 1000 if self.last_ts else 0} ms, RPM: {self.rpm:.2f}")
         self.fig.canvas.draw()
         self.fig.canvas.flush_events()
         plt.pause(pause_time)
@@ -215,7 +215,7 @@ class RobotSimulator:
         self.lowpass_interval = 0.0
         self.sc.set_offsets(np.empty((0, 2)))
         self.heading_line.set_data([0, 0], [0, 0])  # Hide line initially
-        self.ax.set_title("Real-Time Robot LiDAR Simulation (Events: 0, TS: 0 ms)")
+        self.ax.set_title("Real-Time Robot LiDAR Simulation\nEvents: 0, TS: 0 ms, RPM: 0.00")
         self.fig.canvas.draw()
         self.fig.canvas.flush_events()
 
