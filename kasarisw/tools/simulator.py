@@ -1,3 +1,4 @@
+from collections import deque
 import math
 import matplotlib
 matplotlib.use('TkAgg')
@@ -110,7 +111,7 @@ class RobotSimulator:
         
         # Apply offset
         a_calibrated = accel_g - self.accel_offset
-       
+        
         # Convert acceleration to m/s²
         a = a_calibrated * g
         
@@ -215,16 +216,15 @@ class RobotSimulator:
         """
         if self.debug:
             print(f"Draw called with {len(self.points)} points")
-        if self.points:
-            offsets = np.array(self.points)
-            if self.debug:
-                print(f"Drawing {len(offsets)} points, range x: {offsets[:, 0].min():.2f} to {offsets[:, 0].max():.2f}, "
-                      f"y: {offsets[:, 1].min():.2f} to {offsets[:, 1].max():.2f}")
-            self.sc.set_offsets(offsets)
+        if self.point_history:
+            all_points = [pt for batch in self.point_history for pt in batch]
+            offsets = np.array(all_points) if all_points else np.empty((0, 2))
         else:
-            self.sc.set_offsets(np.empty((0, 2)))
-            if self.debug:
-                print("No points to draw")
+            offsets = np.empty((0, 2))
+        if self.debug and len(offsets) > 0:
+            print(f"Drawing {len(offsets)} points, range x: {offsets[:, 0].min():.2f} to {offsets[:, 0].max():.2f}, "
+                  f"y: {offsets[:, 1].min():.2f} to {offsets[:, 1].max():.2f}")
+        self.sc.set_offsets(offsets)
         
         # Update heading line
         heading_length = 200 * self.scale  # Fixed length for visibility
@@ -271,6 +271,7 @@ class RobotSimulator:
         self.lowpass_interval = 0.0
         self.mode = 'play'
         self.virtual_elapsed = 0.0
+        self.point_history = deque(maxlen=5)
         if self.rotation_arrow:
             self.rotation_arrow.remove()
             self.rotation_arrow = None
@@ -286,7 +287,7 @@ def process_events(source, sim: RobotSimulator, is_file: bool = True, max_events
     
     Parameters:
     source (str or file-like): Path to log file or '-' for stdin.
-    sim (RobotSimulator): Simulator instance.
+   sim (RobotSimulator): Simulator instance.
     is_file (bool): True if source is a file path, False for stdin.
     max_events (int): Optional max number of events to process.
     debug (bool): Enable debug prints.
@@ -352,9 +353,6 @@ def process_events(source, sim: RobotSimulator, is_file: bool = True, max_events
             print(f"Batch: sim_ts={current_sim_ts}, batch_start={batch_start_sim_ts}, batch_end={batch_end_ts}")
         
         if current_sim_ts >= batch_end_ts:
-            # Clear points for new batch
-            sim.points = []
-            
             # Process events in the current 100ms sim interval
             processed = 0
             while current_event_idx < len(events) and events[current_event_idx][1] < batch_end_ts:
@@ -365,6 +363,9 @@ def process_events(source, sim: RobotSimulator, is_file: bool = True, max_events
                 processed += 1
             if debug:
                 print(f"Processed {processed} events in batch")
+            
+            sim.point_history.append(sim.points.copy())
+            sim.points = []
             
             sim.draw()
             batch_start_sim_ts = batch_end_ts
