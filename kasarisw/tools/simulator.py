@@ -1,4 +1,3 @@
-from collections import deque
 import math
 import matplotlib
 matplotlib.use('TkAgg')
@@ -12,6 +11,7 @@ import argparse
 import matplotlib.patches as patches
 import tkinter as tk
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from collections import deque
 
 class RobotSimulator:
     """
@@ -56,10 +56,14 @@ class RobotSimulator:
         self.speed = {'play': 1.0, 'slow': 0.25, 'pause': 0.0}
         self.virtual_elapsed = 0.0
         
+        self.running = True
+        self.after_id = None
+        
         # Set up interactive plot with Tkinter
         self.root = tk.Tk()
         self.root.title("Robot Simulator")
         self.root.geometry("2000x2000")
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         if self.debug:
             print(f"Matplotlib backend: {plt.get_backend()}")
         plt.rcParams.update({'font.size': 12 * self.scale})
@@ -87,6 +91,12 @@ class RobotSimulator:
         self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=1)
         
         self.root.bind('<Key>', self.on_key_press)
+
+    def on_close(self):
+        self.running = False
+        if self.after_id:
+            self.root.after_cancel(self.after_id)
+        self.root.quit()
 
     def on_key_press(self, event):
         char = event.char.lower()
@@ -271,6 +281,7 @@ class RobotSimulator:
         self.lowpass_interval = 0.0
         self.mode = 'play'
         self.virtual_elapsed = 0.0
+        self.running = True
         self.point_history = deque(maxlen=5)
         if self.rotation_arrow:
             self.rotation_arrow.remove()
@@ -287,7 +298,7 @@ def process_events(source, sim: RobotSimulator, is_file: bool = True, max_events
     
     Parameters:
     source (str or file-like): Path to log file or '-' for stdin.
-   sim (RobotSimulator): Simulator instance.
+    sim (RobotSimulator): Simulator instance.
     is_file (bool): True if source is a file path, False for stdin.
     max_events (int): Optional max number of events to process.
     debug (bool): Enable debug prints.
@@ -342,6 +353,9 @@ def process_events(source, sim: RobotSimulator, is_file: bool = True, max_events
     def scheduled_update():
         nonlocal current_event_idx, batch_start_sim_ts, batch_end_ts, last_real
         
+        if not sim.running:
+            return
+        
         current_real = time.time()
         delta_real = current_real - last_real
         last_real = current_real
@@ -372,9 +386,9 @@ def process_events(source, sim: RobotSimulator, is_file: bool = True, max_events
             batch_end_ts += interval_us
         
         if current_event_idx < len(events):
-            sim.root.after(10, scheduled_update)
+            sim.after_id = sim.root.after(10, scheduled_update)
     
-    sim.root.after(10, scheduled_update)
+    sim.after_id = sim.root.after(10, scheduled_update)
     sim.root.mainloop()
 
 if __name__ == "__main__":
@@ -388,3 +402,5 @@ if __name__ == "__main__":
         process_events(args.source, sim, debug=args.debug)
     except FileNotFoundError:
         print(f"Log file {args.source} not found.")
+    except KeyboardInterrupt:
+        sys.exit(0)
