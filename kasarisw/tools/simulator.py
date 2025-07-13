@@ -1,4 +1,6 @@
 import math
+import matplotlib
+matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
 import time
 from typing import List, Tuple, Union
@@ -7,6 +9,8 @@ import sys
 import numpy as np
 import argparse
 import matplotlib.patches as patches
+import tkinter as tk
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 class RobotSimulator:
     """
@@ -28,6 +32,9 @@ class RobotSimulator:
         self.event_count = 0  # Counter for processed events
         self.last_lidar_theta = 0.0  # Theta at the last LiDAR event
         
+        # Scale factor for high-DPI
+        self.scale = 2.0
+        
         # Calibration
         self.accel_offset = 0.0
         self.calibration_samples = []
@@ -43,21 +50,29 @@ class RobotSimulator:
         self.lowpass_alpha = 0.1
         self.bias_factor = 0.01  # Bias as fraction of lowpass_interval
         
-        # Set up interactive plot
-        plt.ion()
+        # Playback controls
+        self.mode = 'play'
+        self.speed = {'play': 1.0, 'slow': 0.25, 'pause': 0.0}
+        self.virtual_elapsed = 0.0
+        
+        # Set up interactive plot with Tkinter
+        self.root = tk.Tk()
+        self.root.title("Robot Simulator")
+        self.root.geometry("2000x2000")
         if self.debug:
             print(f"Matplotlib backend: {plt.get_backend()}")
-        self.fig, self.ax = plt.subplots(figsize=(8, 8))
+        plt.rcParams.update({'font.size': 12 * self.scale})
+        self.fig, self.ax = plt.subplots(figsize=(8 * self.scale, 8 * self.scale))
         self.ax.set_title("Real-Time Robot LiDAR Simulation\nEvents: 0, TS: 0 ms, RPM: 0.00")
         self.ax.set_xlabel("X (units)")
         self.ax.set_ylabel("Y (units)")
         self.ax.set_aspect('equal')
         self.ax.grid(True)
-        self.sc = self.ax.scatter([], [], s=50, alpha=1.0, color='blue', marker='o')
+        self.sc = self.ax.scatter([], [], s=50 * self.scale, alpha=1.0, color='blue', marker='o')
         
         # Heading indicator (line from center)
-        self.heading_line, = self.ax.plot([0, math.cos(self.theta) * 200], [0, math.sin(self.theta) * 200],
-                                          color='r', linewidth=2)
+        self.heading_line, = self.ax.plot([0, math.cos(self.theta) * 200 * self.scale], [0, math.sin(self.theta) * 200 * self.scale],
+                                          color='r', linewidth=2 * self.scale)
         
         # Rotation direction arrow
         self.rotation_arrow = None
@@ -66,8 +81,19 @@ class RobotSimulator:
         self.ax.set_xlim(-1200, 1200)
         self.ax.set_ylim(-1200, 1200)
         
-        self.fig.canvas.draw()
-        self.fig.canvas.flush_events()
+        self.canvas = FigureCanvasTkAgg(self.fig, master=self.root)
+        self.canvas.draw()
+        self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=1)
+        
+        self.root.bind('<Key>', self.on_key_press)
+
+    def on_key_press(self, event):
+        char = event.char.lower()
+        if char in ['c', 'x', 'z']:
+            modes = {'c': 'play', 'x': 'slow', 'z': 'pause'}
+            self.mode = modes[char]
+            if self.debug:
+                print(f"Mode changed to {self.mode}")
 
     def accel_to_rpm(self, accel_g: float) -> float:
         """
@@ -84,7 +110,7 @@ class RobotSimulator:
         
         # Apply offset
         a_calibrated = accel_g - self.accel_offset
-        
+       
         # Convert acceleration to m/s²
         a = a_calibrated * g
         
@@ -116,7 +142,7 @@ class RobotSimulator:
         original_ts = ts = event[1]
         
         if event_type == "WifiControl":
-            # Skip time/theta update due to diferent ts base; process if needed in future
+            # Skip time/theta update due to different ts base; process if needed in future
             return
         
         if self.last_ts is None:
@@ -183,12 +209,9 @@ class RobotSimulator:
         
         self.event_count += 1
 
-    def draw(self, pause_time: float = 0.01):
+    def draw(self):
         """
         Update and redraw the plot.
-        
-        Parameters:
-        pause_time (float): Time to pause for real-time effect (seconds).
         """
         if self.debug:
             print(f"Draw called with {len(self.points)} points")
@@ -196,7 +219,7 @@ class RobotSimulator:
             offsets = np.array(self.points)
             if self.debug:
                 print(f"Drawing {len(offsets)} points, range x: {offsets[:, 0].min():.2f} to {offsets[:, 0].max():.2f}, "
-                      f"y: {offsets[:, 1].mi():.2f} to {offsets[:, 1].max():.2f}")
+                      f"y: {offsets[:, 1].min():.2f} to {offsets[:, 1].max():.2f}")
             self.sc.set_offsets(offsets)
         else:
             self.sc.set_offsets(np.empty((0, 2)))
@@ -204,7 +227,7 @@ class RobotSimulator:
                 print("No points to draw")
         
         # Update heading line
-        heading_length = 200  # Fixed length for visibility
+        heading_length = 200 * self.scale  # Fixed length for visibility
         self.heading_line.set_data([0, math.cos(self.theta) * heading_length],
                                    [0, math.sin(self.theta) * heading_length])
         
@@ -213,23 +236,24 @@ class RobotSimulator:
             self.rotation_arrow.remove()
             self.rotation_arrow = None
         
+        arrow_length = 200 * self.scale
+        y_pos = 1100
         if self.rpm != 0:
             if self.rpm > 0:  # CCW, point left
-                self.rotation_arrow = patches.FancyArrowPatch((200, 1100), (0, 1100),
+                self.rotation_arrow = patches.FancyArrowPatch((arrow_length, y_pos), (0, y_pos),
                                                               connectionstyle="arc3,rad=0.5",
-                                                              arrowstyle="->", mutation_scale=20,
+                                                              arrowstyle="->", mutation_scale=20 * self.scale,
                                                               color='black')
             else:  # CW, point right
-                self.rotation_arrow = patches.FancyArrowPatch((-200, 1100), (0, 1100),
+                self.rotation_arrow = patches.FancyArrowPatch((-arrow_length, y_pos), (0, y_pos),
                                                               connectionstyle="arc3,rad=-0.5",
-                                                              arrowstyle="->", mutation_scale=20,
+                                                              arrowstyle="->", mutation_scale=20 * self.scale,
                                                               color='black')
             self.ax.add_patch(self.rotation_arrow)
         
         self.ax.set_title(f"Real-Time Robot LiDAR Simulation\nEvents: {self.event_count}, TS: {self.last_ts // 1000 if self.last_ts else 0} ms, RPM: {self.rpm:.2f}")
-        self.fig.canvas.draw()
-        self.fig.canvas.flush_events()
-        plt.pause(pause_time)
+        self.canvas.draw()
+        self.canvas.flush_events()
 
     def reset(self):
         """Reset the simulation state."""
@@ -245,14 +269,16 @@ class RobotSimulator:
         self.last_lidar_ts = None
         self.last_lidar_adjusted_ts = None
         self.lowpass_interval = 0.0
+        self.mode = 'play'
+        self.virtual_elapsed = 0.0
         if self.rotation_arrow:
             self.rotation_arrow.remove()
             self.rotation_arrow = None
         self.sc.set_offsets(np.empty((0, 2)))
         self.heading_line.set_data([0, 0], [0, 0])  # Hide line initially
         self.ax.set_title("Real-Time Robot LiDAR Simulation\nEvents: 0, TS: 0 ms, RPM: 0.00")
-        self.fig.canvas.draw()
-        self.fig.canvas.flush_events()
+        self.canvas.draw()
+        self.canvas.flush_events()
 
 def process_events(source, sim: RobotSimulator, is_file: bool = True, max_events: int = None, debug=False):
     """
@@ -306,16 +332,21 @@ def process_events(source, sim: RobotSimulator, is_file: bool = True, max_events
     
     # Initialize simulation time
     first_ts = events[0][1]
-    start_real_time = time.time()
+    last_real = time.time()
     current_event_idx = 0
     interval_us = 100000  # 100ms in microseconds
     batch_start_sim_ts = first_ts
     batch_end_ts = batch_start_sim_ts + interval_us
     
-    while current_event_idx < len(events):
-        current_real_time = time.time()
-        elapsed_real_s = current_real_time - start_real_time
-        current_sim_ts = first_ts + elapsed_real_s * 1_000_000  # us
+    def scheduled_update():
+        nonlocal current_event_idx, batch_start_sim_ts, batch_end_ts, last_real
+        
+        current_real = time.time()
+        delta_real = current_real - last_real
+        last_real = current_real
+        
+        sim.virtual_elapsed += delta_real * sim.speed[sim.mode]
+        current_sim_ts = first_ts + sim.virtual_elapsed * 1_000_000
         
         if debug:
             print(f"Batch: sim_ts={current_sim_ts}, batch_start={batch_start_sim_ts}, batch_end={batch_end_ts}")
@@ -335,17 +366,15 @@ def process_events(source, sim: RobotSimulator, is_file: bool = True, max_events
             if debug:
                 print(f"Processed {processed} events in batch")
             
-            sim.draw(pause_time=0.1)
+            sim.draw()
             batch_start_sim_ts = batch_end_ts
             batch_end_ts += interval_us
-        else:
-            plt.pause(0.01)  # Small pause to allow GUI events
         
-        if max_events and sim.event_count >= max_events:
-            break
+        if current_event_idx < len(events):
+            sim.root.after(10, scheduled_update)
     
-    plt.ioff()
-    plt.show()
+    sim.root.after(10, scheduled_update)
+    sim.root.mainloop()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Robot Simulator")
