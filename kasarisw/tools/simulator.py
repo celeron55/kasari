@@ -5,6 +5,7 @@ from typing import List, Tuple, Union
 import json
 import sys
 import numpy as np
+import argparse
 
 class RobotSimulator:
     """
@@ -14,10 +15,11 @@ class RobotSimulator:
     Provides methods to update with new events and draw the current plot.
     """
     
-    def __init__(self):
+    def __init__(self, debug=False):
         """
         Initialize the simulator.
         """
+        self.debug = debug
         self.theta = 0.0  # Current angular position (radians)
         self.rpm = 0.0  # Current rotational speed (RPM)
         self.last_ts = None  # Last timestamp (initialize to None)
@@ -42,7 +44,8 @@ class RobotSimulator:
         
         # Set up interactive plot
         plt.ion()
-        print(f"Matplotlib backend: {plt.get_backend()}")
+        if self.debug:
+            print(f"Matplotlib backend: {plt.get_backend()}")
         self.fig, self.ax = plt.subplots(figsize=(8, 8))
         self.ax.set_title("Real-Time Robot LiDAR Simulation\nEvents: 0, TS: 0 ms, RPM: 0.00")
         self.ax.set_xlabel("X (units)")
@@ -117,7 +120,8 @@ class RobotSimulator:
             return  # Initial event, no dt
         
         if event_type == "Lidar":
-            print(f"Lidar event at original ts={original_ts}, current theta={self.theta}, last_lidar_theta={self.last_lidar_theta}")
+            if self.debug:
+                print(f"Lidar event at original ts={original_ts}, current theta={self.theta}, last_lidar_theta={self.last_lidar_theta}")
             if self.last_lidar_ts is not None:
                 actual_delta = original_ts - self.last_lidar_ts
                 if self.lowpass_interval == 0.0:
@@ -128,7 +132,8 @@ class RobotSimulator:
                 expected_ts = self.last_lidar_adjusted_ts + self.lowpass_interval - bias
                 ts = expected_ts if expected_ts <= original_ts else original_ts
                 ts = max(ts, self.last_ts)  # Ensure dt >= 0
-                print(f"Lidar adjustment: actual_delta={actual_delta}, lowpass_interval={self.lowpass_interval}, expected_ts={expected_ts}, adjusted_ts={ts}")
+                if self.debug:
+                    print(f"Lidar adjustment: actual_delta={actual_delta}, lowpass_interval={self.lowpass_interval}, expected_ts={expected_ts}, adjusted_ts={ts}")
             self.last_lidar_ts = original_ts
             self.last_lidar_adjusted_ts = ts
         
@@ -159,7 +164,8 @@ class RobotSimulator:
             distances = event[2:6]  # d1, d2, d3, d4
             delta_theta = self.theta - self.last_lidar_theta
             step_theta = delta_theta / len(distances)
-            print(f"Lidar processing: distances={distances}, delta_theta={delta_theta}, step_theta={step_theta}")
+            if self.debug:
+                print(f"Lidar processing: distances={distances}, delta_theta={delta_theta}, step_theta={step_theta}")
             for i, d in enumerate(distances):
                 if d > 0:  # Valid distance (filter out invalid/zero)
                     # Angle for this beam: starting from last_lidar_theta + (i+0.5)*step
@@ -167,7 +173,8 @@ class RobotSimulator:
                     x = d * math.cos(angle)
                     y = d * math.sin(angle)
                     self.points.append((x, y))
-                    print(f"Adding point: i={i}, d={d}, angle={angle}, x={x}, y={y}, total points now={len(self.points)}")
+                    if self.debug:
+                        print(f"Adding point: i={i}, d={d}, angle={angle}, x={x}, y={y}, total points now={len(self.points)}")
             self.last_lidar_theta = self.theta  # Update for next
         
         self.event_count += 1
@@ -179,15 +186,18 @@ class RobotSimulator:
         Parameters:
         pause_time (float): Time to pause for real-time effect (seconds).
         """
-        print(f"Draw called with {len(self.points)} points")
+        if self.debug:
+            print(f"Draw called with {len(self.points)} points")
         if self.points:
             offsets = np.array(self.points)
-            print(f"Drawing {len(offsets)} points, range x: {offsets[:, 0].min():.2f} to {offsets[:, 0].max():.2f}, "
-                  f"y: {offsets[:, 1].min():.2f} to {offsets[:, 1].max():.2f}")
+            if self.debug:
+                print(f"Drawing {len(offsets)} points, range x: {offsets[:, 0].min():.2f} to {offsets[:, 0].max():.2f}, "
+                      f"y: {offsets[:, 1].min():.2f} to {offsets[:, 1].max():.2f}")
             self.sc.set_offsets(offsets)
         else:
             self.sc.set_offsets(np.empty((0, 2)))
-            print("No points to draw")
+            if self.debug:
+                print("No points to draw")
         
         # Update heading line
         heading_length = 200  # Fixed length for visibility
@@ -219,7 +229,7 @@ class RobotSimulator:
         self.fig.canvas.draw()
         self.fig.canvas.flush_events()
 
-def process_events(source, sim: RobotSimulator, is_file: bool = True, max_events: int = None):
+def process_events(source, sim: RobotSimulator, is_file: bool = True, max_events: int = None, debug=False):
     """
     Process events from a file or stdin in real-time.
     
@@ -228,6 +238,7 @@ def process_events(source, sim: RobotSimulator, is_file: bool = True, max_events
     sim (RobotSimulator): Simulator instance.
     is_file (bool): True if source is a file path, False for stdin.
     max_events (int): Optional max number of events to process.
+    debug (bool): Enable debug prints.
     """
     sim.reset()
     handle = None
@@ -281,7 +292,8 @@ def process_events(source, sim: RobotSimulator, is_file: bool = True, max_events
         elapsed_real_s = current_real_time - start_real_time
         current_sim_ts = first_ts + elapsed_real_s * 1_000_000  # us
         
-        print(f"Batch: sim_ts={current_sim_ts}, batch_start={batch_start_sim_ts}, batch_end={batch_end_ts}")
+        if debug:
+            print(f"Batch: sim_ts={current_sim_ts}, batch_start={batch_start_sim_ts}, batch_end={batch_end_ts}")
         
         if current_sim_ts >= batch_end_ts:
             # Clear points for new batch
@@ -290,11 +302,13 @@ def process_events(source, sim: RobotSimulator, is_file: bool = True, max_events
             # Process events in the current 100ms sim interval
             processed = 0
             while current_event_idx < len(events) and events[current_event_idx][1] < batch_end_ts:
-                print(f"Processing event {current_event_idx}: {events[current_event_idx][0]} at ts={events[current_event_idx][1]}")
+                if debug:
+                    print(f"Processing event {current_event_idx}: {events[current_event_idx][0]} at ts={events[current_event_idx][1]}")
                 sim.update(events[current_event_idx])
                 current_event_idx += 1
                 processed += 1
-            print(f"Processed {processed} events in batch")
+            if debug:
+                print(f"Processed {processed} events in batch")
             
             sim.draw(pause_time=0.1)
             batch_start_sim_ts = batch_end_ts
@@ -309,13 +323,13 @@ def process_events(source, sim: RobotSimulator, is_file: bool = True, max_events
     plt.show()
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python simulator.py <log_file_path or '-'>")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(description="Robot Simulator")
+    parser.add_argument("source", help="Log file path or '-' for stdin")
+    parser.add_argument("--debug", action="store_true", help="Enable debug prints")
+    args = parser.parse_args()
     
-    source = sys.argv[1]
-    sim = RobotSimulator()
+    sim = RobotSimulator(debug=args.debug)
     try:
-        process_events(source, sim)
+        process_events(args.source, sim, debug=args.debug)
     except FileNotFoundError:
-        print(f"Log file {source} not found.")
+        print(f"Log file {args.source} not found.")
