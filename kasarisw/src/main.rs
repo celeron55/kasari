@@ -164,7 +164,7 @@ async fn main(spawner: Spawner) {
     // UART2
     let (tx_pin, rx_pin) = (peripherals.GPIO17, peripherals.GPIO16);
     let config = esp_hal::uart::Config::default()
-        .with_rx(esp_hal::uart::RxConfig::default().with_fifo_full_threshold(sensors::READ_BUF_SIZE as u16))
+        .with_rx(esp_hal::uart::RxConfig::default().with_fifo_full_threshold(11))
         .with_baudrate(115200);
     let uart2 = Uart::new(peripherals.UART2, config)
         .unwrap()

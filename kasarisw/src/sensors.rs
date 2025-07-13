@@ -48,26 +48,23 @@ pub async fn lidar_reader(
     signal: &'static Signal<NoopRawMutex, usize>,
     event_channel: &'static EventChannel,
 ) {
-	let publisher = event_channel.publisher().unwrap();
+    let publisher = event_channel.publisher().unwrap();
 
-    const MAX_BUFFER_SIZE: usize = 2 * READ_BUF_SIZE + 16;
-    let mut rbuf: [u8; MAX_BUFFER_SIZE] = [0u8; MAX_BUFFER_SIZE];
-    let mut offset = 0;
+    const MAX_BUFFER_SIZE: usize = 2 * PACKET_SIZE + 16;
+    let mut rbuf: [u8; 1] = [0u8; 1];  // Single-byte read buffer
     let mut ring_buf: ConstGenericRingBuffer<u8, MAX_BUFFER_SIZE> = ConstGenericRingBuffer::new();
     let mut log_i: u32 = 0;
 
     loop {
-        let r = embedded_io_async::Read::read(&mut rx, &mut rbuf[offset..]).await;
+        let r = embedded_io_async::Read::read(&mut rx, &mut rbuf).await;
         match r {
-            Ok(len) => {
-                offset += len;
-                for &byte in &rbuf[..offset] {
-                    ring_buf.push(byte);
-                }
-                offset = 0;
+            Ok(len) if len > 0 => {
+                ring_buf.push(rbuf[0]);
 
+                // Check and parse complete packets after each byte
                 while ring_buf.len() >= PACKET_SIZE {
                     if ring_buf.get(0) != Some(&HEAD_BYTE) {
+                        // Skip until potential header
                         while let Some(byte) = ring_buf.get(0) {
                             if *byte == HEAD_BYTE {
                                 break;
@@ -82,16 +79,18 @@ pub async fn lidar_reader(
                         packet[i] = ring_buf.get(i).copied().unwrap_or(0);
                     }
 
+                    // Timestamp right after confirming a complete packet (close to last byte reception)
+                    let timestamp = embassy_time::Instant::now().as_ticks();
+
                     if let Some(parsed) = parse_packet(&packet) {
-                        let timestamp = embassy_time::Instant::now().as_ticks();
-						let event = InputEvent::Lidar(
-							timestamp,
-							parsed.distances[0] as f32,
-							parsed.distances[1] as f32,
-							parsed.distances[2] as f32,
-							parsed.distances[3] as f32,
-						);
-						publisher.publish_immediate(event);
+                        let event = InputEvent::Lidar(
+                            timestamp,
+                            parsed.distances[0] as f32,
+                            parsed.distances[1] as f32,
+                            parsed.distances[2] as f32,
+                            parsed.distances[3] as f32,
+                        );
+                        publisher.publish_immediate(event);
 
                         log_i += 1;
                         if log_i % 20 == 1 && LOG_LIDAR {
@@ -108,12 +107,14 @@ pub async fn lidar_reader(
                         println!("Invalid packet");
                     }
 
+                    // Dequeue the processed packet
                     for _ in 0..PACKET_SIZE {
                         ring_buf.dequeue();
                     }
                     signal.signal(PACKET_SIZE);
                 }
             }
+            Ok(_) => {},  // No data, continue
             Err(e) => println!("RX Error: {:?}", e),
         }
     }
