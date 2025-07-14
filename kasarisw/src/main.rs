@@ -17,6 +17,8 @@ use esp_hal::{
     uart::{Uart, UartRx, UartTx},
     Async,
 };
+use esp_hal::interrupt::{self, Priority};
+use esp_hal_embassy::InterruptExecutor;
 use esp_hal::ledc::timer::TimerIFace;
 use esp_hal::ledc::channel::ChannelIFace;
 use esp_println::{print, println};
@@ -93,6 +95,11 @@ async fn encoder_emulation_task(encoder_emulation_output_pinmap: AnyPin<'static>
     }
 }
 
+// The generic argument ends up being passed as the generic argument to
+// SoftwareInterrupt<u8> and that selects interrupt
+// peripherals::Interrupt::FROM_CPU_INTR0...3 based on the argument
+static EXECUTOR: StaticCell<InterruptExecutor<0>> = StaticCell::new();
+
 #[esp_hal_embassy::main]
 async fn main(spawner: Spawner) {
     esp_println::println!("Init!");
@@ -105,8 +112,14 @@ async fn main(spawner: Spawner) {
     let timg1 = TimerGroup::new(peripherals.TIMG1);
     esp_hal_embassy::init(timg1.timer0);
 
-	// This has to be initialized before any tasks are started
-	let event_channel = &*shared::EVENT_CHANNEL.init(PubSubChannel::new());
+    // Initialize InterruptExecutor for high-priority tasks
+    let sw_int0 = unsafe { esp_hal::interrupt::software::SoftwareInterrupt::<0>::steal() };
+    let interrupt_executor = InterruptExecutor::new(sw_int0);
+    let interrupt_spawner = interrupt_executor.start(Priority::Priority3); // Medium-high priority
+    interrupt::enable(esp_hal::peripherals::Interrupt::FROM_CPU_INTR0, Priority::Priority3).unwrap();
+
+    // This has to be initialized before any tasks are started
+    let event_channel = &*shared::EVENT_CHANNEL.init(PubSubChannel::new());
 
     // GPIO
     let encoder_emulation_output_pinmap = peripherals.GPIO13.degrade();
@@ -164,7 +177,7 @@ async fn main(spawner: Spawner) {
     // UART2
     let (tx_pin, rx_pin) = (peripherals.GPIO17, peripherals.GPIO16);
     let config = esp_hal::uart::Config::default()
-        .with_rx(esp_hal::uart::RxConfig::default().with_fifo_full_threshold(11))
+        .with_rx(esp_hal::uart::RxConfig::default().with_fifo_full_threshold(1))
         .with_baudrate(115200);
     let uart2 = Uart::new(peripherals.UART2, config)
         .unwrap()
@@ -276,7 +289,7 @@ async fn main(spawner: Spawner) {
     static SIGNAL: StaticCell<embassy_sync::signal::Signal<embassy_sync::blocking_mutex::raw::NoopRawMutex, usize>> = StaticCell::new();
     let signal = &*SIGNAL.init(embassy_sync::signal::Signal::new());
 
-    spawner.spawn(sensors::lidar_reader(rx, signal, event_channel)).ok();
+    interrupt_spawner.spawn(sensors::lidar_reader(rx, signal, event_channel)).ok();
     //spawner.spawn(sensors::lidar_writer(tx, signal)).ok();
     spawner.spawn(encoder_emulation_task(encoder_emulation_output_pinmap)).ok();
     spawner.spawn(sensors::accelerometer_task(spi, event_channel)).ok();
