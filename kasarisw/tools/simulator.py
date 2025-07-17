@@ -60,7 +60,7 @@ class RobotSimulator:
         # Set up interactive plot with Tkinter
         self.root = tk.Tk()
         self.root.title("Robot Simulator")
-        self.root.geometry("1000x1000")
+        self.root.geometry("2000x2000")
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         if self.debug:
             print(f"Matplotlib backend: {plt.get_backend()}")
