@@ -6,7 +6,7 @@ use embassy_sync::pubsub::PubSubChannel;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use static_cell::StaticCell;
 
-pub const LOG_LIDAR: bool = false;
+pub const LOG_LIDAR: bool = true;
 pub const LOG_RECEIVER: bool = false;
 pub const LOG_VBAT: bool = false;
 

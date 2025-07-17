@@ -14,7 +14,7 @@ use esp_hal::{
     spi::master::Spi,
     time::Rate,
     timer::timg::TimerGroup,
-    uart::{Uart, UartRx, UartTx},
+    uart::{Uart, RxConfig, UartInterrupt},
     Async,
     Blocking,
 };
@@ -54,6 +54,7 @@ use core::cell::RefCell;
 use critical_section::Mutex;
 use alloc::collections::VecDeque;
 use ringbuffer::RingBuffer;
+use core::sync::atomic::{AtomicU32, Ordering};
 
 mod sensors;
 mod shared;
@@ -101,15 +102,17 @@ async fn encoder_emulation_task(encoder_emulation_output_pinmap: AnyPin<'static>
     }
 }
 
-static RX: StaticCell<Mutex<RefCell<Option<UartRx<'static, Blocking>>>>> = StaticCell::new();
-static BYTE_BUFFER: StaticCell<Mutex<RefCell<ConstGenericRingBuffer<u8, 1024>>>> = StaticCell::new();
+static UART2: StaticCell<Mutex<RefCell<Option<Uart<'static, Blocking>>>>> = StaticCell::new();
+static LIDAR_BYTE_BUFFER: StaticCell<Mutex<RefCell<ConstGenericRingBuffer<u8, 1024>>>> = StaticCell::new();
 static LIDAR_EVENT_QUEUE: StaticCell<Mutex<RefCell<VecDeque<kasari::InputEvent>>>> = StaticCell::new();
 static SIGNAL_LIDAR: StaticCell<Signal<NoopRawMutex, ()>> = StaticCell::new();
 
-static mut RX_REF: Option<&'static Mutex<RefCell<Option<UartRx<'static, Blocking>>>>> = None;
-static mut BYTE_BUFFER_REF: Option<&'static Mutex<RefCell<ConstGenericRingBuffer<u8, 1024>>>> = None;
+static mut UART2_REF: Option<&'static Mutex<RefCell<Option<Uart<'static, Blocking>>>>> = None;
+static mut LIDAR_BYTE_BUFFER_REF: Option<&'static Mutex<RefCell<ConstGenericRingBuffer<u8, 1024>>>> = None;
 static mut LIDAR_EVENT_QUEUE_REF: Option<&'static Mutex<RefCell<VecDeque<kasari::InputEvent>>>> = None;
 static mut SIGNAL_LIDAR_REF: Option<&'static Signal<NoopRawMutex, ()>> = None;
+
+static LIDAR_PACKET_COUNT: AtomicU32 = AtomicU32::new(0);
 
 #[esp_hal_embassy::main]
 async fn main(spawner: Spawner) {
@@ -182,22 +185,20 @@ async fn main(spawner: Spawner) {
     // UART2
     let (tx_pin, rx_pin) = (peripherals.GPIO17, peripherals.GPIO16);
     let config = esp_hal::uart::Config::default()
-        .with_rx(esp_hal::uart::RxConfig::default().with_fifo_full_threshold(11))
+        .with_rx(esp_hal::uart::RxConfig::default().with_fifo_full_threshold(sensors::PACKET_SIZE as u16))
         .with_baudrate(115200);
     let mut uart2 = Uart::new(peripherals.UART2, config)
         .unwrap()
         .with_tx(tx_pin)
         .with_rx(rx_pin);
-    uart2.set_interrupt_handler(uart2_handler);
-    uart2.listen(esp_hal::uart::UartInterrupt::RxFifoFull);
-    // TODO: Don't split; instead put uart2 into a global so that read_buffered
-    // can be used, which is a non-blocking read
-    let (rx, tx) = uart2.split();
 
-    let rx_static = RX.init(Mutex::new(RefCell::new(Some(rx))));
-    unsafe { RX_REF = Some(rx_static); }
-    let byte_buffer = BYTE_BUFFER.init(Mutex::new(RefCell::new(ConstGenericRingBuffer::new())));
-    unsafe { BYTE_BUFFER_REF = Some(byte_buffer); }
+    uart2.set_interrupt_handler(uart2_handler);
+    uart2.listen(UartInterrupt::RxFifoFull);
+
+    let uart_static = UART2.init(Mutex::new(RefCell::new(Some(uart2))));
+    unsafe { UART2_REF = Some(uart_static); }
+    let byte_buffer = LIDAR_BYTE_BUFFER.init(Mutex::new(RefCell::new(ConstGenericRingBuffer::new())));
+    unsafe { LIDAR_BYTE_BUFFER_REF = Some(byte_buffer); }
     let lidar_event_queue = LIDAR_EVENT_QUEUE.init(Mutex::new(RefCell::new(VecDeque::new())));
     unsafe { LIDAR_EVENT_QUEUE_REF = Some(lidar_event_queue); }
     let signal_lidar = SIGNAL_LIDAR.init(Signal::new());
@@ -370,26 +371,14 @@ async fn main(spawner: Spawner) {
 fn uart2_handler() {
     //println!("uart2_handler");
     critical_section::with(|cs| {
-        // TODO: uart2
-        let mut rx_ref = unsafe { RX_REF.unwrap().borrow(cs).borrow_mut() };
-        if let Some(rx) = rx_ref.as_mut() {
+        let mut uart_ref = unsafe { UART2_REF.unwrap().borrow(cs).borrow_mut() };
+        if let Some(uart) = uart_ref.as_mut() {
             let mut temp = [0u8; 32];
-            let mut read_bytes = 0;
-            // TODO: uart2.read_buffered(&mut temp)
-            while rx.read_ready() {
-                let len = rx.read(&mut temp[read_bytes..]).unwrap_or(0);
-                read_bytes += len;
-                if len == 0 {
-                    break;
-                }
-            }
-            // TODO:
-            /*uart2.clear_interrupts(
-                UartInterrupt::RxFifoFull
-            );*/
+            let read_bytes = uart.read_buffered(&mut temp).unwrap_or(0);
+            uart.clear_interrupts(UartInterrupt::RxFifoFull.into());
 
             //println!("read_bytes={}", read_bytes);
-            let mut buf = unsafe { BYTE_BUFFER_REF.unwrap().borrow(cs).borrow_mut() };
+            let mut buf = unsafe { LIDAR_BYTE_BUFFER_REF.unwrap().borrow(cs).borrow_mut() };
             for &byte in &temp[0..read_bytes] {
                 buf.push(byte);
             }
@@ -421,6 +410,19 @@ fn uart2_handler() {
                     );
                     let mut queue = unsafe { LIDAR_EVENT_QUEUE_REF.unwrap().borrow(cs).borrow_mut() };
                     queue.push_back(event);
+
+                    let packet_i = LIDAR_PACKET_COUNT.fetch_add(1, Ordering::Relaxed);;
+                    if packet_i % 20 == 1 && shared::LOG_LIDAR {
+                        println!(
+                            "Lidar packet {}: timestamp={}, distances=[{}, {}, {}, {}] mm",
+                            packet_i,
+                            timestamp,
+                            parsed.distances[0],
+                            parsed.distances[1],
+                            parsed.distances[2],
+                            parsed.distances[3]
+                        );
+                    }
                 } else {
                     println!("Invalid packet");
                 }
