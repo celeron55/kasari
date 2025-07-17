@@ -86,29 +86,15 @@ fn target_speed_to_pwm_duty(speed_percent: f32, duty_range: u32) -> u32 {
     (duty_range * duty_percent as u32) / 100
 }
 
-#[embassy_executor::task]
-async fn encoder_emulation_task(encoder_emulation_output_pinmap: AnyPin<'static>) {
-    let mut encoder_emulation_output_pin = Output::new(
-        encoder_emulation_output_pinmap,
-        Level::High,
-        OutputConfig::default(),
-    );
-
-    loop {
-        encoder_emulation_output_pin.set_low();
-        Timer::after(Duration::from_millis(10)).await;
-        encoder_emulation_output_pin.set_high();
-        Timer::after(Duration::from_millis(10)).await;
-    }
-}
+const LIDAR_BUFFER_SIZE: usize = sensors::PACKET_SIZE * 2;
 
 static UART2: StaticCell<Mutex<RefCell<Option<Uart<'static, Blocking>>>>> = StaticCell::new();
-static LIDAR_BYTE_BUFFER: StaticCell<Mutex<RefCell<ConstGenericRingBuffer<u8, 1024>>>> = StaticCell::new();
+static LIDAR_BYTE_BUFFER: StaticCell<Mutex<RefCell<ConstGenericRingBuffer<u8, LIDAR_BUFFER_SIZE>>>> = StaticCell::new();
 static LIDAR_EVENT_QUEUE: StaticCell<Mutex<RefCell<VecDeque<kasari::InputEvent>>>> = StaticCell::new();
 static SIGNAL_LIDAR: StaticCell<Signal<NoopRawMutex, ()>> = StaticCell::new();
 
 static mut UART2_REF: Option<&'static Mutex<RefCell<Option<Uart<'static, Blocking>>>>> = None;
-static mut LIDAR_BYTE_BUFFER_REF: Option<&'static Mutex<RefCell<ConstGenericRingBuffer<u8, 1024>>>> = None;
+static mut LIDAR_BYTE_BUFFER_REF: Option<&'static Mutex<RefCell<ConstGenericRingBuffer<u8, LIDAR_BUFFER_SIZE>>>> = None;
 static mut LIDAR_EVENT_QUEUE_REF: Option<&'static Mutex<RefCell<VecDeque<kasari::InputEvent>>>> = None;
 static mut SIGNAL_LIDAR_REF: Option<&'static Signal<NoopRawMutex, ()>> = None;
 
@@ -130,7 +116,6 @@ async fn main(spawner: Spawner) {
     let event_channel = &*shared::EVENT_CHANNEL.init(PubSubChannel::new());
 
     // GPIO
-    let encoder_emulation_output_pinmap = peripherals.GPIO13.degrade();
     let rc_receiver_ch1_pinmap = peripherals.GPIO34;
 
     // ADC (battery voltage monitoring)
@@ -138,7 +123,7 @@ async fn main(spawner: Spawner) {
     let mut vbat_pin = adc1_config.enable_pin(peripherals.GPIO39, adc::Attenuation::_11dB);
     let mut adc1 = Adc::new(peripherals.ADC1, adc1_config);
 
-    // PWM output to ESCs
+    // PWM output to ESCs (LEDC channels 0 and 1)
     let esc_right_pin = Output::new(peripherals.GPIO26, Level::Low, OutputConfig::default());
     let esc_left_pin = Output::new(peripherals.GPIO27, Level::Low, OutputConfig::default());
 
@@ -181,6 +166,29 @@ async fn main(spawner: Spawner) {
 
     _ = channel0.set_duty(0);
     _ = channel1.set_duty(0);
+
+    // 50Hz square wave to LIDAR encoder input (LEDC channel 2)
+    let lidar_encoder_output_pin = Output::new(peripherals.GPIO13, Level::Low, OutputConfig::default());
+
+    let mut lstimer2 = ledc.timer::<esp_hal::ledc::LowSpeed>(ledc_timer::Number::Timer2);
+    lstimer2
+        .configure(ledc_timer::config::Config {
+            duty: ledc_timer::config::Duty::Duty8Bit,
+            clock_source: ledc_timer::LSClockSource::APBClk,
+            frequency: Rate::from_hz(50.0 as u32),
+        })
+        .unwrap();
+
+    let mut channel2 = ledc.channel(ledc_channel::Number::Channel2, lidar_encoder_output_pin);
+    channel2
+        .configure(ledc_channel::config::Config {
+            timer: &lstimer0,
+            duty_pct: 50,
+            pin_config: ledc_channel::config::PinConfig::PushPull,
+        })
+        .unwrap();
+
+    _ = channel2.set_duty(50);
 
     // UART2
     let (tx_pin, rx_pin) = (peripherals.GPIO17, peripherals.GPIO16);
@@ -231,6 +239,11 @@ async fn main(spawner: Spawner) {
         .channel0
         .configure(rc_receiver_ch1_pinmap, rx_config)
         .unwrap();
+
+    // Spawn tasks
+    spawner.spawn(sensors::lidar_publisher(event_channel)).ok();
+    spawner.spawn(sensors::accelerometer_task(spi, event_channel)).ok();
+    spawner.spawn(sensors::rmt_task(rmt_ch0, event_channel)).ok();
 
     // Initialize the Wi-Fi controller
     let esp_wifi_ctrl = &*mk_static!(
@@ -303,16 +316,6 @@ async fn main(spawner: Spawner) {
 
     spawner.spawn(listener_task(ap_stack, sta_stack, event_channel)).ok();
 
-    // Spawn tasks
-    static SIGNAL: StaticCell<embassy_sync::signal::Signal<embassy_sync::blocking_mutex::raw::NoopRawMutex, usize>> = StaticCell::new();
-    let signal = &*SIGNAL.init(embassy_sync::signal::Signal::new());
-
-    spawner.spawn(sensors::lidar_publisher(event_channel)).ok();
-    //spawner.spawn(sensors::lidar_writer(tx, signal)).ok();
-    spawner.spawn(encoder_emulation_task(encoder_emulation_output_pinmap)).ok();
-    spawner.spawn(sensors::accelerometer_task(spi, event_channel)).ok();
-    spawner.spawn(sensors::rmt_task(rmt_ch0, event_channel)).ok();
-
     // Main loop
     let mut logic = shared::kasari::MainLogic::new();
     let mut publisher = event_channel.publisher().unwrap();
@@ -373,7 +376,7 @@ fn uart2_handler() {
     critical_section::with(|cs| {
         let mut uart_ref = unsafe { UART2_REF.unwrap().borrow(cs).borrow_mut() };
         if let Some(uart) = uart_ref.as_mut() {
-            let mut temp = [0u8; 32];
+            let mut temp = [0u8; sensors::PACKET_SIZE * 2];
             let read_bytes = uart.read_buffered(&mut temp).unwrap_or(0);
             uart.clear_interrupts(UartInterrupt::RxFifoFull.into());
 

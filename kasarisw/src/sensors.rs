@@ -25,7 +25,6 @@ use crate::LIDAR_EVENT_QUEUE_REF;
 // LIDAR constants
 pub const PACKET_SIZE: usize = 22;
 pub const HEAD_BYTE: u8 = 0xFA;
-pub const READ_BUF_SIZE: usize = 64;
 
 #[embassy_executor::task]
 pub async fn lidar_writer(
