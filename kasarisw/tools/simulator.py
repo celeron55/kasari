@@ -57,8 +57,6 @@ class RobotSimulator:
         self.running = True
         self.after_id = None
         
-        self.fade_time_us = 100_000  # Fade out points after 200 ms
-        
         # Set up interactive plot with Tkinter
         self.root = tk.Tk()
         self.root.title("Robot Simulator")
@@ -204,8 +202,9 @@ class RobotSimulator:
                 self.rpm = self.accel_to_rpm(accel_y)
         
         elif event_type == "Lidar":
-            delta_theta = self.theta - self.last_lidar_theta
-            delta_theta = ((delta_theta + math.pi) % (2 * math.pi)) - math.pi
+            # Each measurement within the event is spaced by a certain amount of
+            # time (2ms) so use a speed dependent step_theta
+            delta_theta = 0.002 * ((self.rpm / 60.0) * 2 * math.pi) if self.rpm != 0.0 else 0
             distances = event[2:6]  # d1, d2, d3, d4
             step_theta = delta_theta / len(distances)
             if self.debug:
@@ -214,8 +213,8 @@ class RobotSimulator:
             points_this_event = []
             for i, d in enumerate(distances):
                 if d > 0:  # Valid distance (filter out invalid/zero)
-                    # Angle for this beam: starting from last_lidar_theta + (i+0.5)*step_theta
-                    angle = self.last_lidar_theta + (i + 0.5) * step_theta
+                    # Angle for this beam
+                    angle = self.theta - (len(distances) - i - 1.0) * step_theta
                     x = d * math.cos(angle)
                     y = d * math.sin(angle)
                     points_this_event.append((x, y))
@@ -237,7 +236,8 @@ class RobotSimulator:
         if self.debug:
             print(f"Draw called with {len(self.points)} points")
         current_ts = self.last_ts if self.last_ts else 0
-        while self.point_history and self.point_history[0][0] < current_ts - self.fade_time_us:
+        fade_time_us = 100_000 if self.rpm == 0.0 else 1.1 * 60 * 1_000_000 / abs(self.rpm)  # Dynamic fade time; 1.1 rotations
+        while self.point_history and self.point_history[0][0] < current_ts - fade_time_us:
             self.point_history.popleft()
         all_points = [pt for ts, batch in self.point_history for pt in batch]
         offsets = np.array(all_points) if all_points else np.empty((0, 2))
@@ -360,7 +360,7 @@ def process_events(source, sim: RobotSimulator, is_file: bool = True, max_events
     first_ts = events[0][1]
     last_real = time.time()
     current_event_idx = 0
-    interval_us = 50000  # 50ms in microseconds
+    interval_us = 20000  # 20ms in microseconds
     batch_start_sim_ts = first_ts
     batch_end_ts = batch_start_sim_ts + interval_us
     
@@ -408,7 +408,7 @@ def process_events(source, sim: RobotSimulator, is_file: bool = True, max_events
                     print("No more LiDAR events.")
         elif sim.mode in ['play', 'slow']:
             if current_sim_ts >= batch_end_ts:
-                # Process events in the current 50ms sim interval
+                # Process events in the current 20ms sim interval
                 processed = 0
                 while current_event_idx < len(events) and events[current_event_idx][1] < batch_end_ts:
                     if debug:
@@ -428,10 +428,10 @@ def process_events(source, sim: RobotSimulator, is_file: bool = True, max_events
                 batch_end_ts += interval_us
         
         if current_event_idx < len(events):
-            interval_ms = 10 if sim.mode == 'play' else 50
+            interval_ms = 20 if sim.mode == 'play' else 100
             sim.after_id = sim.root.after(interval_ms, scheduled_update)
     
-    sim.after_id = sim.root.after(10, scheduled_update)
+    sim.after_id = sim.root.after(20, scheduled_update)
     sim.root.mainloop()
 
 if __name__ == "__main__":
