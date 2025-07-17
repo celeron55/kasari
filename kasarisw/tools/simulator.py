@@ -57,7 +57,7 @@ class RobotSimulator:
         self.running = True
         self.after_id = None
         
-        self.fade_time_us = 200_000  # Fade out points after 200 ms
+        self.fade_time_us = 100_000  # Fade out points after 200 ms
         
         # Set up interactive plot with Tkinter
         self.root = tk.Tk()
@@ -110,7 +110,7 @@ class RobotSimulator:
         elif char == 'e':
             if self.mode != 'step':
                 self.mode = 'step'
-                if elf.debug:
+                if self.debug:
                     print("Entered event stepping mode. Press 'e' to advance to next LiDAR event.")
             else:
                 self.step_requested = True
@@ -183,7 +183,7 @@ class RobotSimulator:
         
         # Update angular position based on current RPM
         self.theta += (self.rpm / 60.0) * 2 * math.pi * dt
-        self.theta %= (2 * math.pi)  # Normalize to [0, 2π)
+        self.theta %= (2 * math.pi)
         
         self.last_ts = ts
         
@@ -204,15 +204,16 @@ class RobotSimulator:
                 self.rpm = self.accel_to_rpm(accel_y)
         
         elif event_type == "Lidar":
-            distances = event[2:6]  # d1, d2, d3, d4
             delta_theta = self.theta - self.last_lidar_theta
+            delta_theta = ((delta_theta + math.pi) % (2 * math.pi)) - math.pi
+            distances = event[2:6]  # d1, d2, d3, d4
             step_theta = delta_theta / len(distances)
             if self.debug:
                 print(f"Lidar processing: distances={distances}, delta_theta={delta_theta}, step_theta={step_theta}")
             
             points_this_event = []
             for i, d in enumerate(distances):
-                if d > 0:  # Vlid distance (filter out invalid/zero)
+                if d > 0:  # Valid distance (filter out invalid/zero)
                     # Angle for this beam: starting from last_lidar_theta + (i+0.5)*step_theta
                     angle = self.last_lidar_theta + (i + 0.5) * step_theta
                     x = d * math.cos(angle)
@@ -359,7 +360,7 @@ def process_events(source, sim: RobotSimulator, is_file: bool = True, max_events
     first_ts = events[0][1]
     last_real = time.time()
     current_event_idx = 0
-    interval_us = 100000  # 100ms in microseconds
+    interval_us = 50000  # 50ms in microseconds
     batch_start_sim_ts = first_ts
     batch_end_ts = batch_start_sim_ts + interval_us
     
@@ -399,15 +400,15 @@ def process_events(source, sim: RobotSimulator, is_file: bool = True, max_events
                     # Sync virtual time and batch
                     if current_event_idx > 0:
                         last_processed_ts = events[current_event_idx - 1][1]
-                        sim.virtual_elapsed = (last_processed_ts - first_ts) / 1_000_000.0
+                        sim.virtual_elapsed = (last_processed_ts - first_ts) / 1_000.0
                         batch_start_sim_ts = last_processed_ts
                         batch_end_ts = last_processed_ts + interval_us
                     sim.draw()
                 else:
                     print("No more LiDAR events.")
-        else:
+        elif sim.mode in ['play', 'slow']:
             if current_sim_ts >= batch_end_ts:
-                # Process events in the current 100ms sim interval
+                # Process events in the current 50ms sim interval
                 processed = 0
                 while current_event_idx < len(events) and events[current_event_idx][1] < batch_end_ts:
                     if debug:
@@ -427,7 +428,8 @@ def process_events(source, sim: RobotSimulator, is_file: bool = True, max_events
                 batch_end_ts += interval_us
         
         if current_event_idx < len(events):
-            sim.after_id = sim.root.after(10, scheduled_update)
+            interval_ms = 10 if sim.mode == 'play' else 50
+            sim.after_id = sim.root.after(interval_ms, scheduled_update)
     
     sim.after_id = sim.root.after(10, scheduled_update)
     sim.root.mainloop()
