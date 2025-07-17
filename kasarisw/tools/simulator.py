@@ -13,6 +13,8 @@ import tkinter as tk
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from collections import deque
 
+POINT_HISTORY_STEPS = 1
+
 class RobotSimulator:
     """
     A simulator class for replaying robot events in real-time.
@@ -173,7 +175,7 @@ class RobotSimulator:
         if event_type == "Accelerometer":
             raw_accel_y = event[2]  # Assume Y is the radial acceleration
             # Apply EMA lowpass filter (alpha=0.1 for smoothing)
-            self.smoothed_accel_y = 0.1 * raw_accel_y + 0.9 * self.smoothed_accel_y
+            self.smoothed_accel_y = 0.05 * raw_accel_y + 0.95 * self.smoothed_accel_y
             accel_y = self.smoothed_accel_y  # Use smoothed value
 
             if not self.calibration_done:
@@ -264,7 +266,7 @@ class RobotSimulator:
         self.mode = 'play'
         self.virtual_elapsed = 0.0
         self.running = True
-        self.point_history = deque(maxlen=5)
+        self.point_history = deque(maxlen=POINT_HISTORY_STEPS)
         if self.rotation_arrow:
             self.rotation_arrow.remove()
             self.rotation_arrow = None
