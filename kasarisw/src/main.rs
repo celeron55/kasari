@@ -182,13 +182,11 @@ async fn main(spawner: Spawner) {
     let mut channel2 = ledc.channel(ledc_channel::Number::Channel2, lidar_encoder_output_pin);
     channel2
         .configure(ledc_channel::config::Config {
-            timer: &lstimer0,
+            timer: &lstimer2,
             duty_pct: 50,
             pin_config: ledc_channel::config::PinConfig::PushPull,
         })
         .unwrap();
-
-    _ = channel2.set_duty(50);
 
     // UART2
     let (tx_pin, rx_pin) = (peripherals.GPIO17, peripherals.GPIO16);
