@@ -86,7 +86,7 @@ fn target_speed_to_pwm_duty(speed_percent: f32, duty_range: u32) -> u32 {
     (duty_range * duty_percent as u32) / 100
 }
 
-const LIDAR_BUFFER_SIZE: usize = sensors::PACKET_SIZE * 2;
+const LIDAR_BUFFER_SIZE: usize = sensors::PACKET_SIZE * 4;
 
 static UART2: StaticCell<Mutex<RefCell<Option<Uart<'static, Blocking>>>>> = StaticCell::new();
 static LIDAR_BYTE_BUFFER: StaticCell<Mutex<RefCell<ConstGenericRingBuffer<u8, LIDAR_BUFFER_SIZE>>>> = StaticCell::new();
@@ -424,12 +424,13 @@ fn uart2_handler() {
                             parsed.distances[3]
                         );
                     }
+
+                    for _ in 0..sensors::PACKET_SIZE {
+                        buf.dequeue();
+                    }
                 } else {
                     println!("Invalid packet");
-                }
-
-                for _ in 0..sensors::PACKET_SIZE {
-                    buf.dequeue();
+                    buf.clear();
                 }
             }
         }
