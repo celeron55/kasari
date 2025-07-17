@@ -175,7 +175,7 @@ async fn main(spawner: Spawner) {
         .configure(ledc_timer::config::Config {
             duty: ledc_timer::config::Duty::Duty8Bit,
             clock_source: ledc_timer::LSClockSource::APBClk,
-            frequency: Rate::from_hz(50.0 as u32),
+            frequency: Rate::from_hz(60.0 as u32),
         })
         .unwrap();
 
@@ -413,9 +413,11 @@ fn uart2_handler() {
                     queue.push_back(event);
 
                     let packet_i = LIDAR_PACKET_COUNT.fetch_add(1, Ordering::Relaxed);;
-                    if packet_i % 20 == 1 && shared::LOG_LIDAR {
+                    if (packet_i % 20 == 1 || shared::LOG_ALL_LIDAR)  && shared::LOG_LIDAR {
+                        // This message has to be quite short when logging all
+                        // LIDAR messages instead of just every 20th
                         println!(
-                            "Lidar packet {}: timestamp={}, distances=[{}, {}, {}, {}] mm",
+                            "Lidar {}: t={}, d={},{},{},{}",
                             packet_i,
                             timestamp,
                             parsed.distances[0],

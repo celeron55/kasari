@@ -203,8 +203,8 @@ class RobotSimulator:
         
         elif event_type == "Lidar":
             # Each measurement within the event is spaced by a certain amount of
-            # time (2ms) so use a speed dependent step_theta
-            delta_theta = 0.002 * ((self.rpm / 60.0) * 2 * math.pi) if self.rpm != 0.0 else 0
+            # time (1.67ms) so use a speed dependent step_theta
+            delta_theta = 0.00167 * ((self.rpm / 60.0) * 2 * math.pi) if self.rpm != 0.0 else 0
             distances = event[2:6]  # d1, d2, d3, d4
             step_theta = delta_theta / len(distances)
             if self.debug:
