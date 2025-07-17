@@ -18,6 +18,9 @@ use ringbuffer::ConstGenericRingBuffer;
 use ringbuffer::RingBuffer;
 use crate::shared::{EventChannel, LOG_LIDAR, kasari::InputEvent};
 use esp_hal::rmt::RxChannelAsync;
+use alloc::collections::VecDeque;
+use crate::SIGNAL_LIDAR_REF;
+use crate::LIDAR_EVENT_QUEUE_REF;
 
 // LIDAR constants
 pub const PACKET_SIZE: usize = 22;
@@ -43,79 +46,20 @@ pub async fn lidar_writer(
 }
 
 #[embassy_executor::task]
-pub async fn lidar_reader(
-    mut rx: UartRx<'static, Async>,
-    signal: &'static Signal<NoopRawMutex, usize>,
+pub async fn lidar_publisher(
     event_channel: &'static EventChannel,
 ) {
     let publisher = event_channel.publisher().unwrap();
 
-    const MAX_BUFFER_SIZE: usize = 2 * PACKET_SIZE + 16;
-    let mut rbuf: [u8; 1] = [0u8; 1];  // Single-byte read buffer
-    let mut ring_buf: ConstGenericRingBuffer<u8, MAX_BUFFER_SIZE> = ConstGenericRingBuffer::new();
-    let mut log_i: u32 = 0;
-
     loop {
-        let r = embedded_io_async::Read::read(&mut rx, &mut rbuf).await;
-        match r {
-            Ok(len) if len > 0 => {
-                ring_buf.push(rbuf[0]);
-
-                // Check and parse complete packets after each byte
-                while ring_buf.len() >= PACKET_SIZE {
-                    if ring_buf.get(0) != Some(&HEAD_BYTE) {
-                        // Skip until potential header
-                        while let Some(byte) = ring_buf.get(0) {
-                            if *byte == HEAD_BYTE {
-                                break;
-                            }
-                            ring_buf.dequeue();
-                        }
-                        continue;
-                    }
-
-                    let mut packet = [0u8; PACKET_SIZE];
-                    for i in 0..PACKET_SIZE {
-                        packet[i] = ring_buf.get(i).copied().unwrap_or(0);
-                    }
-
-                    // Timestamp right after confirming a complete packet (close to last byte reception)
-                    let timestamp = embassy_time::Instant::now().as_ticks();
-
-                    if let Some(parsed) = parse_packet(&packet) {
-                        let event = InputEvent::Lidar(
-                            timestamp,
-                            parsed.distances[0] as f32,
-                            parsed.distances[1] as f32,
-                            parsed.distances[2] as f32,
-                            parsed.distances[3] as f32,
-                        );
-                        publisher.publish_immediate(event);
-
-                        log_i += 1;
-                        if log_i % 20 == 1 && LOG_LIDAR {
-                            println!(
-                                "Lidar packet {}: distances=[{}, {}, {}, {}] mm",
-                                log_i,
-                                parsed.distances[0],
-                                parsed.distances[1],
-                                parsed.distances[2],
-                                parsed.distances[3]
-                            );
-                        }
-                    } else {
-                        println!("Invalid packet");
-                    }
-
-                    // Dequeue the processed packet
-                    for _ in 0..PACKET_SIZE {
-                        ring_buf.dequeue();
-                    }
-                    signal.signal(PACKET_SIZE);
-                }
-            }
-            Ok(_) => {},  // No data, continue
-            Err(e) => println!("RX Error: {:?}", e),
+        unsafe { SIGNAL_LIDAR_REF.unwrap().wait().await; }
+        let mut events = VecDeque::new();
+        critical_section::with(|cs| {
+            let mut queue = unsafe { LIDAR_EVENT_QUEUE_REF.unwrap().borrow(cs).borrow_mut() };
+            events = queue.drain(..).collect();
+        });
+        for event in events {
+            publisher.publish_immediate(event);
         }
     }
 }

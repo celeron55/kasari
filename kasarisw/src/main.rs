@@ -16,14 +16,14 @@ use esp_hal::{
     timer::timg::TimerGroup,
     uart::{Uart, UartRx, UartTx},
     Async,
+    Blocking,
 };
-use esp_hal::interrupt::{self, Priority};
-use esp_hal_embassy::InterruptExecutor;
+use esp_hal::interrupt;
 use esp_hal::ledc::timer::TimerIFace;
 use esp_hal::ledc::channel::ChannelIFace;
 use esp_println::{print, println};
 use static_cell::StaticCell;
-use ringbuffer::RingBuffer;
+use ringbuffer::ConstGenericRingBuffer;
 use core::net::Ipv4Addr;
 use embassy_net::{
     IpListenEndpoint,
@@ -47,7 +47,13 @@ use esp_wifi::{
 };
 use embassy_sync::pubsub::PubSubChannel;
 use esp_wifi::wifi::WifiDevice;
+use embassy_sync::signal::Signal;
+use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 extern crate alloc;
+use core::cell::RefCell;
+use critical_section::Mutex;
+use alloc::collections::VecDeque;
+use ringbuffer::RingBuffer;
 
 mod sensors;
 mod shared;
@@ -95,10 +101,15 @@ async fn encoder_emulation_task(encoder_emulation_output_pinmap: AnyPin<'static>
     }
 }
 
-// The generic argument ends up being passed as the generic argument to
-// SoftwareInterrupt<u8> and that selects interrupt
-// peripherals::Interrupt::FROM_CPU_INTR0...3 based on the argument
-static EXECUTOR: StaticCell<InterruptExecutor<0>> = StaticCell::new();
+static RX: StaticCell<Mutex<RefCell<Option<UartRx<'static, Blocking>>>>> = StaticCell::new();
+static BYTE_BUFFER: StaticCell<Mutex<RefCell<ConstGenericRingBuffer<u8, 1024>>>> = StaticCell::new();
+static LIDAR_EVENT_QUEUE: StaticCell<Mutex<RefCell<VecDeque<kasari::InputEvent>>>> = StaticCell::new();
+static SIGNAL_LIDAR: StaticCell<Signal<NoopRawMutex, ()>> = StaticCell::new();
+
+static mut RX_REF: Option<&'static Mutex<RefCell<Option<UartRx<'static, Blocking>>>>> = None;
+static mut BYTE_BUFFER_REF: Option<&'static Mutex<RefCell<ConstGenericRingBuffer<u8, 1024>>>> = None;
+static mut LIDAR_EVENT_QUEUE_REF: Option<&'static Mutex<RefCell<VecDeque<kasari::InputEvent>>>> = None;
+static mut SIGNAL_LIDAR_REF: Option<&'static Signal<NoopRawMutex, ()>> = None;
 
 #[esp_hal_embassy::main]
 async fn main(spawner: Spawner) {
@@ -111,12 +122,6 @@ async fn main(spawner: Spawner) {
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     let timg1 = TimerGroup::new(peripherals.TIMG1);
     esp_hal_embassy::init(timg1.timer0);
-
-    // Initialize InterruptExecutor for high-priority tasks
-    let sw_int0 = unsafe { esp_hal::interrupt::software::SoftwareInterrupt::<0>::steal() };
-    let interrupt_executor = InterruptExecutor::new(sw_int0);
-    let interrupt_spawner = interrupt_executor.start(Priority::Priority3); // Medium-high priority
-    interrupt::enable(esp_hal::peripherals::Interrupt::FROM_CPU_INTR0, Priority::Priority3).unwrap();
 
     // This has to be initialized before any tasks are started
     let event_channel = &*shared::EVENT_CHANNEL.init(PubSubChannel::new());
@@ -177,14 +182,26 @@ async fn main(spawner: Spawner) {
     // UART2
     let (tx_pin, rx_pin) = (peripherals.GPIO17, peripherals.GPIO16);
     let config = esp_hal::uart::Config::default()
-        .with_rx(esp_hal::uart::RxConfig::default().with_fifo_full_threshold(1))
+        .with_rx(esp_hal::uart::RxConfig::default().with_fifo_full_threshold(11))
         .with_baudrate(115200);
-    let uart2 = Uart::new(peripherals.UART2, config)
+    let mut uart2 = Uart::new(peripherals.UART2, config)
         .unwrap()
         .with_tx(tx_pin)
-        .with_rx(rx_pin)
-        .into_async();
+        .with_rx(rx_pin);
+    uart2.set_interrupt_handler(uart2_handler);
+    uart2.listen(esp_hal::uart::UartInterrupt::RxFifoFull);
+    // TODO: Don't split; instead put uart2 into a global so that read_buffered
+    // can be used, which is a non-blocking read
     let (rx, tx) = uart2.split();
+
+    let rx_static = RX.init(Mutex::new(RefCell::new(Some(rx))));
+    unsafe { RX_REF = Some(rx_static); }
+    let byte_buffer = BYTE_BUFFER.init(Mutex::new(RefCell::new(ConstGenericRingBuffer::new())));
+    unsafe { BYTE_BUFFER_REF = Some(byte_buffer); }
+    let lidar_event_queue = LIDAR_EVENT_QUEUE.init(Mutex::new(RefCell::new(VecDeque::new())));
+    unsafe { LIDAR_EVENT_QUEUE_REF = Some(lidar_event_queue); }
+    let signal_lidar = SIGNAL_LIDAR.init(Signal::new());
+    unsafe { SIGNAL_LIDAR_REF = Some(signal_lidar); }
 
     // SPI (ADXL373)
     let sclk = peripherals.GPIO18;
@@ -289,7 +306,7 @@ async fn main(spawner: Spawner) {
     static SIGNAL: StaticCell<embassy_sync::signal::Signal<embassy_sync::blocking_mutex::raw::NoopRawMutex, usize>> = StaticCell::new();
     let signal = &*SIGNAL.init(embassy_sync::signal::Signal::new());
 
-    interrupt_spawner.spawn(sensors::lidar_reader(rx, signal, event_channel)).ok();
+    spawner.spawn(sensors::lidar_publisher(event_channel)).ok();
     //spawner.spawn(sensors::lidar_writer(tx, signal)).ok();
     spawner.spawn(encoder_emulation_task(encoder_emulation_output_pinmap)).ok();
     spawner.spawn(sensors::accelerometer_task(spi, event_channel)).ok();
@@ -302,33 +319,33 @@ async fn main(spawner: Spawner) {
     let mut loop_i: u64 = 0;
 
     loop {
-		loop_i += 1;
+        loop_i += 1;
 
-		// Measure and publish Vbat
-		if loop_i % 10 == 0 {
-			let vbat_raw = nb::block!(adc1.read_oneshot(&mut vbat_pin)).unwrap();
-			let vbat = (4095 - vbat_raw) as f32 * 0.01045;
-			if shared::LOG_VBAT {
-				esp_println::println!("vbat_raw: {:?}, vbat: {:?} V", vbat_raw, vbat);
-			}
+        // Measure and publish Vbat
+        if loop_i % 10 == 0 {
+            let vbat_raw = nb::block!(adc1.read_oneshot(&mut vbat_pin)).unwrap();
+            let vbat = (4095 - vbat_raw) as f32 * 0.01045;
+            if shared::LOG_VBAT {
+                esp_println::println!("vbat_raw: {:?}, vbat: {:?} V", vbat_raw, vbat);
+            }
 
-			publisher.publish_immediate(
-				shared::kasari::InputEvent::Vbat(
-					embassy_time::Instant::now().as_ticks(),
-					vbat,
-				)
-			);
-		}
+            publisher.publish_immediate(
+                shared::kasari::InputEvent::Vbat(
+                    embassy_time::Instant::now().as_ticks(),
+                    vbat,
+                )
+            );
+        }
 
-		while let Some(event) = subscriber.try_next_message_pure() {
-			logic.feed_event(event);
-		}
+        while let Some(event) = subscriber.try_next_message_pure() {
+            logic.feed_event(event);
+        }
 
         logic.step();
 
         if let Some(ref plan) = logic.motor_control_plan {
-		    let timestamp = embassy_time::Instant::now().as_ticks();
-		    if timestamp - plan.timestamp < 2000 {
+            let timestamp = embassy_time::Instant::now().as_ticks();
+            if timestamp - plan.timestamp < 2000 {
                 let target_speed_percent = plan.throttle;
                 let duty = target_speed_to_pwm_duty(target_speed_percent, 2u32.pow(8));
                 if shared::LOG_RECEIVER {
@@ -347,6 +364,74 @@ async fn main(spawner: Spawner) {
 
         Timer::after_millis(20).await;
     }
+}
+
+#[esp_hal::handler]
+fn uart2_handler() {
+    //println!("uart2_handler");
+    critical_section::with(|cs| {
+        // TODO: uart2
+        let mut rx_ref = unsafe { RX_REF.unwrap().borrow(cs).borrow_mut() };
+        if let Some(rx) = rx_ref.as_mut() {
+            let mut temp = [0u8; 32];
+            let mut read_bytes = 0;
+            // TODO: uart2.read_buffered(&mut temp)
+            while rx.read_ready() {
+                let len = rx.read(&mut temp[read_bytes..]).unwrap_or(0);
+                read_bytes += len;
+                if len == 0 {
+                    break;
+                }
+            }
+            // TODO:
+            /*uart2.clear_interrupts(
+                UartInterrupt::RxFifoFull
+            );*/
+
+            //println!("read_bytes={}", read_bytes);
+            let mut buf = unsafe { BYTE_BUFFER_REF.unwrap().borrow(cs).borrow_mut() };
+            for &byte in &temp[0..read_bytes] {
+                buf.push(byte);
+            }
+
+            while buf.len() >= sensors::PACKET_SIZE {
+                if buf.get(0) != Some(&sensors::HEAD_BYTE) {
+                    while let Some(byte) = buf.get(0) {
+                        if *byte == sensors::HEAD_BYTE {
+                            break;
+                        }
+                        buf.dequeue();
+                    }
+                    continue;
+                }
+
+                let mut packet = [0u8; sensors::PACKET_SIZE];
+                for i in 0..sensors::PACKET_SIZE {
+                    packet[i] = buf.get(i).copied().unwrap_or(0);
+                }
+
+                if let Some(parsed) = sensors::parse_packet(&packet) {
+                    let timestamp = embassy_time::Instant::now().as_ticks();
+                    let event = kasari::InputEvent::Lidar(
+                        timestamp,
+                        parsed.distances[0] as f32,
+                        parsed.distances[1] as f32,
+                        parsed.distances[2] as f32,
+                        parsed.distances[3] as f32,
+                    );
+                    let mut queue = unsafe { LIDAR_EVENT_QUEUE_REF.unwrap().borrow(cs).borrow_mut() };
+                    queue.push_back(event);
+                } else {
+                    println!("Invalid packet");
+                }
+
+                for _ in 0..sensors::PACKET_SIZE {
+                    buf.dequeue();
+                }
+            }
+        }
+    });
+    unsafe { SIGNAL_LIDAR_REF.unwrap().signal(()); }
 }
 
 #[embassy_executor::task]
@@ -461,8 +546,7 @@ async fn listener_task(ap_stack: embassy_net::Stack<'static>, sta_stack: embassy
                                 let m = f32::from_le_bytes(rx_buffer[14..18].try_into().unwrap());
                                 let t = f32::from_le_bytes(rx_buffer[18..22].try_into().unwrap());
                                 publisher.publish_immediate(
-                                    shared::kasari::InputEvent::WifiControl(ts, mode, r, m, t)
-                                );
+                                    shared::kasari::InputEvent::WifiControl(ts, mode, r, m, t)                        );
                                 // Shift buffer
                                 let shift_len = 22;
                                 rx_buffer.copy_within(shift_len.., 0);
