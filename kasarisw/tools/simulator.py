@@ -57,6 +57,8 @@ class RobotSimulator:
         self.running = True
         self.after_id = None
         
+        self.fade_time_us = 200_000  # Fade out points after 200 ms
+        
         # Set up interactive plot with Tkinter
         self.root = tk.Tk()
         self.root.title("Robot Simulator")
@@ -102,12 +104,13 @@ class RobotSimulator:
         if char in ['c', 'x', 'z']:
             modes = {'c': 'play', 'x': 'slow', 'z': 'pause'}
             self.mode = modes[char]
+            self.current_lidar_points = []
             if self.debug:
                 print(f"Mode changed to {self.mode}")
         elif char == 'e':
             if self.mode != 'step':
                 self.mode = 'step'
-                if self.debug:
+                if elf.debug:
                     print("Entered event stepping mode. Press 'e' to advance to next LiDAR event.")
             else:
                 self.step_requested = True
@@ -186,7 +189,7 @@ class RobotSimulator:
         
         if event_type == "Accelerometer":
             raw_accel_y = event[2]  # Assume Y is the radial acceleration
-            # Apply EMA lowpass filter (alpha=0.1 for smoothing)
+            # Apply EMA lowpass filter (alpha=0.05 for smoothing)
             self.smoothed_accel_y = 0.05 * raw_accel_y + 0.95 * self.smoothed_accel_y
             accel_y = self.smoothed_accel_y  # Use smoothed value
 
@@ -209,7 +212,7 @@ class RobotSimulator:
             
             points_this_event = []
             for i, d in enumerate(distances):
-                if d > 0:  # Valid distance (filter out invalid/zero)
+                if d > 0:  # Vlid distance (filter out invalid/zero)
                     # Angle for this beam: starting from last_lidar_theta + (i+0.5)*step_theta
                     angle = self.last_lidar_theta + (i + 0.5) * step_theta
                     x = d * math.cos(angle)
@@ -232,7 +235,10 @@ class RobotSimulator:
         """
         if self.debug:
             print(f"Draw called with {len(self.points)} points")
-        all_points = [pt for batch in self.point_history for pt in batch] if self.point_history else []
+        current_ts = self.last_ts if self.last_ts else 0
+        while self.point_history and self.point_history[0][0] < current_ts - self.fade_time_us:
+            self.point_history.popleft()
+        all_points = [pt for ts, batch in self.point_history for pt in batch]
         offsets = np.array(all_points) if all_points else np.empty((0, 2))
         if self.debug and len(offsets) > 0:
             print(f"Drawing {len(offsets)} points, range x: {offsets[:, 0].min():.2f} to {offsets[:, 0].max():.2f}, "
@@ -287,7 +293,7 @@ class RobotSimulator:
         self.virtual_elapsed = 0.0
         self.step_requested = False
         self.running = True
-        self.point_history = deque(maxlen=POINT_HISTORY_STEPS)
+        self.point_history = deque()
         self.current_lidar_points = []
         if self.rotation_arrow:
             self.rotation_arrow.remove()
@@ -388,7 +394,7 @@ def process_events(source, sim: RobotSimulator, is_file: bool = True, max_events
                 if debug:
                     print(f"Processed {processed} events in step mode")
                 if found_lidar:
-                    sim.point_history.append(sim.points.copy())
+                    sim.point_history.append((sim.last_ts, sim.points.copy()))
                     sim.points = []
                     # Sync virtual time and batch
                     if current_event_idx > 0:
@@ -413,7 +419,7 @@ def process_events(source, sim: RobotSimulator, is_file: bool = True, max_events
                 if debug:
                     print(f"Processed {processed} events in batch")
                 
-                sim.point_history.append(sim.points.copy())
+                sim.point_history.append((sim.last_ts, sim.points.copy()))
                 sim.points = []
                 
                 sim.draw()
@@ -429,7 +435,7 @@ def process_events(source, sim: RobotSimulator, is_file: bool = True, max_events
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Robot Simulator")
     parser.add_argument("source", help="Log file path or '-' for stdin")
-    parser.add_argument("--debug", action="store_true", help="enable debug prints")
+    parser.add_argument("--debug", action="store_true", help="Enable debug prints")
     args = parser.parse_args()
     
     sim = RobotSimulator(debug=args.debug)
