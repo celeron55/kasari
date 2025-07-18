@@ -257,19 +257,30 @@ class ObjectDetector:
         for dist_diff, idx in distance_changes:
             if dist_diff < 80.0:  # Skip small changes
                 continue
-            if idx + 1 < len(windows) and windows[idx + 1][0] < windows[idx][0] - 80.0:
-                avg_middle_dist = windows[idx + 1][0]
-                region_points = windows[idx + 1][1]
-                if len(region_points) < 2:
-                    continue
-                depth = windows[idx][0] - avg_middle_dist
-                score = depth * len(region_points) * 0.5  # Lower score for single changes
-                if debug:
-                    print(f"[DEBUG] detect_objects: Single region at window {idx+1}, points={len(region_points)}, avg_dist={avg_middle_dist:.1f}, depth={depth:.1f}, score={score:.4f}")
-                if depth > 80.0 and 120.0 <= avg_middle_dist <= 1200.0:
-                    if score > best_score:
-                        best_score = score
-                        best_region = (idx + 1, idx + 2, region_points, avg_middle_dist)
+            # Check both farther-to-closer and closer-to-farther transitions
+            if idx + 1 < len(windows):
+                if windows[idx + 1][0] < windows[idx][0] - 80.0:  # Farther to closer
+                    avg_middle_dist = windows[idx + 1][0]
+                    region_points = windows[idx + 1][1]
+                    depth = windows[idx][0] - avg_middle_dist
+                    score = depth * len(region_points) * 0.5  # Lower score for single changes
+                    if debug:
+                        print(f"[DEBUG] detect_objects: Single region at window {idx+1}, points={len(region_points)}, avg_dist={avg_middle_dist:.1f}, depth={depth:.1f}, score={score:.4f}")
+                    if depth > 80.0 and 120.0 <= avg_middle_dist <= 1200.0 and len(region_points) >= 1:
+                        if score > best_score:
+                            best_score = score
+                            best_region = (idx + 1, idx + 2, region_points, avg_middle_dist)
+                elif windows[idx][0] < windows[idx + 1][0] - 80.0:  # Closer to farther
+                    avg_middle_dist = windows[idx][0]
+                    region_points = windows[idx][1]
+                    depth = windows[idx + 1][0] - avg_middle_dist
+                    score = depth * len(region_points) * 0.5  # Lower score for single changes
+                    if debug:
+                        print(f"[DEBUG] detect_objects: Single region at window {idx}, points={len(region_points)}, avg_dist={avg_middle_dist:.1f}, depth={depth:.1f}, score={score:.4f}")
+                    if depth > 80.0 and 120.0 <= avg_middle_dist <= 1200.0 and len(region_points) >= 1:
+                        if score > best_score:
+                            best_score = score
+                            best_region = (idx, idx + 1, region_points, avg_middle_dist)
         
         # Fallback method: point-based protrusion check
         if not best_region:
