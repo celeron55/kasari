@@ -177,6 +177,29 @@ class ObjectDetector:
         print(f"[DEBUG] _fit_line: Found {len(best_inliers)} inliers, direction=({best_direction[0] if best_direction else None}, {best_direction[1] if best_direction else None})")
         return best_line, best_direction, best_inliers
 
+    def _is_point_inside_quad(self, point: Tuple[float, float], corners: List[Tuple[float, float]]) -> bool:
+        """
+        Check if a point (e.g., robot at (0, 0)) is inside a quadrilateral using ray-casting.
+        
+        Parameters:
+        point: (x, y) coordinates of the point to check.
+        corners: List of (x, y) coordinates of quadrilateral vertices.
+        
+        Returns:
+        bool: True if point is inside, False otherwise.
+        """
+        if len(corners) < 4:
+            return False
+        px, py = point
+        inside = False
+        for i in range(4):
+            j = (i + 1) % 4
+            x1, y1 = corners[i]
+            x2, y2 = corners[j]
+            if ((y1 > py) != (y2 > py)) and (px < (x2 - x1) * (py - y1) / (y2 - y1 + 1e-10) + x1):
+                inside = not inside
+        return inside
+
     def _points_to_rectangle(self, points: List[Tuple[float, float, float]]) -> Tuple[Tuple[float, float], float, Tuple[float, float]]:
         """
         Fit a rectangle to points, ensuring it surrounds the robot at (0, 0).
@@ -202,23 +225,26 @@ class ObjectDetector:
             if points:
                 x_vals = [p[0] for p in points]
                 y_vals = [p[1] for p in points]
-                width = min(max(max(x_vals) - min(x_vals), 800.0), 2000.0)
-                height = min(max(max(y_vals) - min(y_vals), 800.0), 2000.0)
+                width = min(max(max(x_vals) - min(x_vals), 500.0), 1500.0)
+                height = min(max(max(y_vals) - min(y_vals), 500.0), 1500.0)
                 print(f"[DEBUG] _points_to_rectangle: Fallback arena size=({width}, {height}), angle=0.0, position=(0.0, 0.0)")
-                return (width, height), 0.0, (0.0, 0.0)  # Center at robot
-            return (800.0, 800.0), 0.0, (0.0, 0.0)
+                return (width, height), 0.0, (0.0, 0.0)
+            return (500.0, 500.0), 0.0, (0.0, 0.0)
+        
+        # Sort lines by inlier count for reliable angle
+        lines_sorted = sorted(lines, key=lambda x: len(x[2]), reverse=True)
         
         # Pair lines to form rectangle sides
         pairs = []
         used = set()
-        for i, (p1, d1, inliers1) in enumerate(lines):
+        for i, (p1, d1, inliers1) in enumerate(lines_sorted):
             if i in used:
                 continue
-            for j, (p2, d2, inliers2) in enumerate(lines[i+1:], i+1):
+            for j, (p2, d2, inliers2) in enumerate(lines_sorted[i+1:], i+1):
                 if j in used:
                     continue
                 dot = abs(d1[0] * d2[0] + d1[1] * d2[1])
-                if dot < 0.6:  # Relaxed perpendicularity
+                if dot < 0.9:  # Relaxed perpendicularity
                     pairs.append((i, j))
                     used.add(i)
                     used.add(j)
@@ -227,76 +253,99 @@ class ObjectDetector:
         corners = []
         if pairs:
             for i, j in pairs:
-                p1, d1, _ = lines[i]
-                p2, d2, _ = lines[j]
+                p1, d1, _ = lines_sorted[i]
+                p2, d2, _ = lines_sorted[j]
                 denom = d1[0] * d2[1] - d1[1] * d2[0]
-                if abs(denom) < 1e-2:
+                if abs(denom) < 1e-1:
                     print(f"[DEBUG] _points_to_rectangle: Skipping intersection due to near-parallel lines (denom={denom})")
                     continue
                 t = ((p2[0] - p1[0]) * d2[1] - (p2[1] - p1[1]) * d2[0]) / denom
                 s = ((p2[0] - p1[0]) * d1[1] - (p2[1] - p1[1]) * d1[0]) / denom
-                if -300 <= t <= 300 and -300 <= s <= 300:  # Wider bounds
+                if -600 <= t <= 600 and -600 <= s <= 600:  # Wider bounds
                     corner = (p1[0] + t * d1[0], p1[1] + t * d1[1])
                     x_vals = [p[0] for p in points]
                     y_vals = [p[1] for p in points]
-                    if (min(x_vals) - 100 <= corner[0] <= max(x_vals) + 100 and
-                        min(y_vals) - 100 <= corner[1] <= max(y_vals) + 100):
+                    if (min(x_vals) - 150 <= corner[0] <= max(x_vals) + 150 and
+                        min(y_vals) - 150 <= corner[1] <= max(y_vals) + 150):
                         corners.append(corner)
                     else:
                         print(f"[DEBUG] _points_to_rectangle: Discarded corner {corner} outside bounds")
         
         if len(corners) >= 4:
-            cx = sum(c[0] for c in corners) / len(corners)
-            cy = sum(c[1] for c in corners) / len(corners)
-            # Bias position toward (0, 0)
-            cx = cx * 0.5  # Move halfway toward origin
-            cy = cy * 0.5
-            width = (math.sqrt((corners[0][0] - corners[2][0])**2 + (corners[0][1] - corners[2][1])**2) +
-                     math.sqrt((corners[1][0] - corners[3][0])**2 + (corners[1][1] - corners[3][1])**2)) / 2
-            height = (math.sqrt((corners[1][0] - corners[0][0])**2 + (corners[1][1] - corners[0][1])**2) +
-                      math.sqrt((corners[3][0] - corners[2][0])**2 + (corners[3][1] - corners[2][1])**2)) / 2
-            width = min(max(width, 800.0), 2000.0)
-            height = min(max(height, 800.0), 2000.0)
-            angle = math.atan2(lines[0][1][1], lines[0][1][0])
-            print(f"[DEBUG] _points_to_rectangle: Detected arena size=({width}, {height}), angle={angle}, position=({cx}, {cy})")
-            return (width, height), angle, (cx, cy)
-        
-        print(f"[DEBUG] _points_to_rectangle: Only found {len(corners)} corners, estimating rectangle from {len(lines)} lines")
-        if len(lines) >= 2:
-            if pairs:
-                line_idx1, line_idx2 = pairs[0]
-                (p1, d1, inliers1), (p2, d2, inliers2) = lines[line_idx1], lines[line_idx2]
+            # Validate that corners form a convex quadrilateral around (0, 0)
+            if self._is_point_inside_quad((0, 0), corners):
+                width = (math.sqrt((corners[0][0] - corners[2][0])**2 + (corners[0][1] - corners[2][1])**2) +
+                         math.sqrt((corners[1][0] - corners[3][0])**2 + (corners[1][1] - corners[3][1])**2)) / 2
+                height = (math.sqrt((corners[1][0] - corners[0][0])**2 + (corners[1][1] - corners[0][1])**2) +
+                          math.sqrt((corners[3][0] - corners[2][0])**2 + (corners[3][1] - corners[2][1])**2)) / 2
+                width = min(max(width, 500.0), 1500.0)
+                height = min(max(height, 500.0), 1500.0)
+                angle = math.atan2(lines_sorted[0][1][1], lines_sorted[0][1][0])
+                print(f"[DEBUG] _points_to_rectangle: Detected arena size=({width}, {height}), angle={angle}, position=(0.0, 0.0), corners={corners}")
+                return (width, height), angle, (0.0, 0.0)
             else:
-                lines_sorted = sorted(lines, key=lambda x: len(x[2]), reverse=True)
-                (p1, d1, inliers1), (p2, d2, inliers2) = lines_sorted[:2]
+                print(f"[DEBUG] _points_to_rectangle: Corners {corners} do not surround (0, 0), estimating rectangle")
+
+        print(f"[DEBUG] _points_to_rectangle: Only found {len(corners)} corners, estimating rectangle from {len(lines)} lines")
+        if len(lines_sorted) >= 2:
+            all_inliers = []
+            for _, _, inliers in lines_sorted:  # Use all lines
+                all_inliers.extend(inliers)
             
+            t_mins = []
+            t_maxs = []
+            for p1, d1, inliers in lines_sorted:
+                t_vals = [(p[0] - p1[0]) * d1[0] + (p[1] - p1[1]) * d1[1] for p in inliers]
+                t_mins.append(min(t_vals))
+                t_maxs.append(max(t_vals))
+            
+            # Estimate corners to surround (0, 0)
+            p1, d1, inliers1 = lines_sorted[0]
+            p2, d2, inliers2 = lines_sorted[1]
             t1_min = min((p[0] - p1[0]) * d1[0] + (p[1] - p1[1]) * d1[1] for p in inliers1)
             t1_max = max((p[0] - p1[0]) * d1[0] + (p[1] - p1[1]) * d1[1] for p in inliers1)
             t2_min = min((p[0] - p2[0]) * d2[0] + (p[1] - p2[1]) * d2[1] for p in inliers2)
             t2_max = max((p[0] - p2[0]) * d2[0] + (p[1] - p2[1]) * d2[1] for p in inliers2)
             
-            c1 = (p1[0] + t1_min * d1[0], p1[1] + t1_min * d1[1])
-            c2 = (p1[0] + t1_max * d1[0], p1[1] + t1_max * d1[1])
-            c3 = (p2[0] + t2_min * d2[0], p2[1] + t2_min * d2[1])
-            c4 = (p2[0] + t2_max * d2[0], p2[1] + t2_max * d2[1])
-            corners = [c1, c2, c3, c4]
+            # Generate corners on both sides of lines and select the set surrounding (0, 0)
+            c1_pos = (p1[0] + t1_min * d1[0], p1[1] + t1_min * d1[1])
+            c2_pos = (p1[0] + t1_max * d1[0], p1[1] + t1_max * d1[1])
+            c3_pos = (p2[0] + t2_min * d2[0], p2[1] + t2_min * d2[1])
+            c4_pos = (p2[0] + t2_max * d2[0], p2[1] + t2_max * d2[1])
             
-            cx = sum(c[0] for c in corners) / len(corners)
-            cy = sum(c[1] for c in corners) / len(corners)
-            cx = cx * 0.5  # Bias toward (0, 0)
-            cy = cy * 0.5
-            width = min(max(abs(t1_max - t1_min), 800.0), 2000.0)
-            height = min(max(abs(t2_max - t2_min), 800.0), 2000.0)
-            angle = math.atan2(d1[1], d1[0])
-            print(f"[DEBUG] _points_to_rectangle: Estimated arena size=({width}, {height}), angle={angle}, position=({cx}, {cy}) from {len(lines)} lines")
-            return (width, height), angle, (cx, cy)
+            # Try opposite side for line 1
+            c1_neg = (p1[0] - t1_min * d1[0], p1[1] - t1_min * d1[1])
+            c2_neg = (p1[0] - t1_max * d1[0], p1[1] - t1_max * d1[1])
+            
+            corners_pos = [c1_pos, c2_pos, c3_pos, c4_pos]
+            corners_neg = [c1_neg, c2_neg, c3_pos, c4_pos]
+            
+            if self._is_point_inside_quad((0, 0), corners_pos):
+                corners = corners_pos
+            elif self._is_point_inside_quad((0, 0), corners_neg):
+                corners = corners_neg
+            else:
+                # Fallback to point cloud extent
+                x_vals = [p[0] for p in points]
+                y_vals = [p[1] for p in points]
+                width = min(max(max(x_vals) - min(x_vals), 500.0), 1500.0)
+                height = min(max(max(y_vals) - min(y_vals), 500.0), 1500.0)
+                angle = math.atan2(lines_sorted[0][1][1], lines_sorted[0][1][0])
+                print(f"[DEBUG] _points_to_rectangle: Estimated arena size=({width}, {height}), angle={angle}, position=(0.0, 0.0) from point cloud")
+                return (width, height), angle, (0.0, 0.0)
+            
+            width = min(max(abs(t1_max - t1_min), 500.0), 1500.0)
+            height = min(max(abs(t2_max - t2_min), 500.0), 1500.0)
+            angle = math.atan2(lines_sorted[0][1][1], lines_sorted[0][1][0])
+            print(f"[DEBUG] _points_to_rectangle: Estimated arena size=({width}, {height}), angle={angle}, position=(0.0, 0.0) from {len(lines)} lines, corners={corners}")
+            return (width, height), angle, (0.0, 0.0)
         
         x_vals = [p[0] for p in points]
         y_vals = [p[1] for p in points]
-        width = min(max(max(x_vals) - min(x_vals), 800.0), 2000.0)
-        height = min(max(max(y_vals) - min(y_vals), 800.0), 2000.0)
+        width = min(max(max(x_vals) - min(x_vals), 500.0), 1500.0)
+        height = min(max(max(y_vals) - min(y_vals), 500.0), 1500.0)
         print(f"[DEBUG] _points_to_rectangle: Fallback arena size=({width}, {height}), angle=0.0, position=(0.0, 0.0)")
-        return (width, height), 0.0, (0.0, 0.0)  # Center at robot
+        return (width, height), 0.0, (0.0, 0.0)
 
     def _find_object(self, points: List[Tuple[float, float, float]], arena: dict) -> Tuple[float, float]:
         """
@@ -320,7 +369,7 @@ class ObjectDetector:
         for x, y, _ in points:
             x_rel = (x - ax) * cos_a + (y - ay) * sin_a
             y_rel = -(x - ax) * sin_a + (y - ay) * cos_a
-            margin = 250.0  # Increased margin
+            margin = 400.0  # Increased margin
             if abs(x_rel) > aw/2 + margin or abs(y_rel) > ah/2 + margin:
                 non_arena_points.append((x, y))
         
@@ -330,7 +379,7 @@ class ObjectDetector:
             print(f"[DEBUG] _find_object: Too few non-arena points, returning fallback")
             return (100.0, 100.0)
         
-        line1_point, line1_dir, line1_inliers = self._fit_line(non_arena_points, threshold=15.0, n_samples=2, n_iterations=20)
+        line1_point, line1_dir, line1_inliers = self._fit_line(non_arena_points, threshold=8.0, n_samples=2, n_iterations=20)
         if not line1_point or len(line1_inliers) < 2:
             print(f"[DEBUG] _find_object: No first line found, inliers={len(line1_inliers) if line1_inliers else 0}")
             cx = sum(p[0] for p in non_arena_points) / len(non_arena_points)
@@ -339,28 +388,29 @@ class ObjectDetector:
             return (cx, cy)
         
         remaining = [p for p in non_arena_points if p not in line1_inliers]
-        line2_point, line2_dir, line2_inliers = self._fit_line(remaining, threshold=15.0, n_samples=2, n_iterations=20)
+        line2_point, line2_dir, line2_inliers = self._fit_line(remaining, threshold=8.0, n_samples=2, n_iterations=20)
         
-        if not line2_point or len(line2_inliers) < 1:  # Reduced to 1 inlier
+        if not line2_point or len(line2_inliers) < 1:
             print(f"[DEBUG] _find_object: No second line found, inliers={len(line2_inliers) if line2_inliers else 0}")
-            cx = sum(p[0] for p in line1_inliers) / len(line1_inliers)
-            cy = sum(p[1] for p in line1_inliers) / len(line1_inliers)
-            print(f"[DEBUG] _find_object: Using first line centroid at ({cx}, {cy})")
+            cx = sum(p[0] for p in non_arena_points) / len(non_arena_points)
+            cy = sum(p[1] for p in non_arena_points) / len(non_arena_points)
+            print(f"[DEBUG] _find_object: Fallback to centroid at ({cx}, {cy})")
             return (cx, cy)
         
         dot = abs(line1_dir[0] * line2_dir[0] + line1_dir[1] * line2_dir[1])
-        if dot > 0.6:
-            print(f"[DEBUG] _find_object: Lines not perpendicular (dot={dot}), using first line")
-            cx = sum(p[0] for p in line1_inliers) / len(line1_inliers)
-            cy = sum(p[1] for p in line1_inliers) / len(line1_inliers)
-            print(f"[DEBUG] _find_object: Using first line centroid at ({cx}, {cy})")
+        if dot > 0.9:
+            print(f"[DEBUG] _find_object: Lines not perpendicular (dot={dot}), using non-arena centroid")
+            cx = sum(p[0] for p in non_arena_points) / len(non_arena_points)
+            cy = sum(p[1] for p in non_arena_points) / len(non_arena_points)
+            print(f"[DEBUG] _find_object: Fallback to centroid at ({cx}, {cy})")
             return (cx, cy)
         
         denom = line1_dir[0] * line2_dir[1] - line1_dir[1] * line2_dir[0]
-        if abs(denom) < 1e-2:
-            print(f"[DEBUG] _find_object: Lines near-parallel (denom={denom}), using inlier centroid")
-            cx = sum(p[0] for p in line1_inliers + line2_inliers) / len(line1_inliers + line2_inliers)
-            cy = sum(p[1] for p in line1_inliers + line2_inliers) / len(line1_inliers + line2_inliers)
+        if abs(denom) < 1e-1:
+            print(f"[DEBUG] _find_object: Lines near-parallel (denom={denom}), using non-arena centroid")
+            cx = sum(p[0] for p in non_arena_points) / len(non_arena_points)
+            cy = sum(p[1] for p in non_arena_points) / len(non_arena_points)
+            print(f"[DEBUG] _find_object: Fallback to centroid at ({cx}, {cy})")
             return (cx, cy)
         
         t = ((line2_point[0] - line1_point[0]) * line2_dir[1] - (line2_point[1] - line1_point[1]) * line2_dir[0]) / denom
@@ -384,8 +434,8 @@ class ObjectDetector:
         """
         print(f"[DEBUG] detect_objects: Received {len(points)} points")
         if len(points) < 10:
-            print("[DEBUG] detect_objects: Too few points, returning fallback")
-            return {'size': (800.0, 800.0), 'angle': 0.0, 'position': (0.0, 0.0)}, (100.0, 100.0)
+            print(f"[DEBUG] detect_objects: Too few points, returning fallback")
+            return {'size': (500.0, 500.0), 'angle': 0.0, 'position': (0.0, 0.0)}, (100.0, 100.0)
         
         size, angle, position = self._points_to_rectangle(points)
         arena = {
