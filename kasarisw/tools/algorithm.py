@@ -239,7 +239,7 @@ class ObjectDetector:
                     avg_middle_dist = sum(middle_dists) / len(middle_dists)
                     start_dist = windows[idx1][0]
                     end_dist = windows[idx2][0]
-                    if avg_middle_dist < min(start_dist, end_dist) - 50.0:  # Middle must be significantly closer
+                    if avg_middle_dist < min(start_dist, end_dist) - 80.0:  # Middle must be significantly closer
                         # Compute depth
                         depth = min(start_dist, end_dist) - avg_middle_dist
                         # Collect points in the middle region
@@ -254,7 +254,7 @@ class ObjectDetector:
                         score = depth * len(region_points)
                         if debug:
                             print(f"[DEBUG] detect_objects: Candidate region {idx1+1} to {idx2-1}, points={len(region_points)}, avg_dist={avg_middle_dist:.1f}, depth={depth:.1f}, convexity={convexity:.1f}, score={score:.4f}")
-                        if depth > 50.0 and convexity > -100.0 and 120.0 <= avg_middle_dist <= 1200.0:  # Valid object
+                        if depth > 80.0 and convexity > -100.0 and 120.0 <= avg_middle_dist <= 1200.0:  # Valid object
                             if score > best_score:
                                 best_score = score
                                 best_region = (idx1 + 1, idx2, region_points, avg_middle_dist)
@@ -263,9 +263,10 @@ class ObjectDetector:
         if not best_region:
             max_protrusion = -float('inf')
             best_point = None
+            best_window_points = []
             for point in points_with_data:
                 x, y, dist, angle = point
-                # Find the wall window containing this point
+                # Find the window containing this point
                 window_idx = None
                 for i, (median_dist, window_points, _) in enumerate(windows):
                     for wp in window_points:
@@ -276,18 +277,47 @@ class ObjectDetector:
                         break
                 if window_idx is None:
                     continue
-                # Compute protrusion
-                protrusion = windows[window_idx][0] - dist
+                # Use neighboring windows for protrusion calculation
+                # The current window is not used as we assume this point is part
+                # of a small cluster of protruding points, which alters the
+                # window median distance
+                # TODO: This is unable to add windows in a balanced manner on
+                #       the first few points. Implement wrapping for the indices
+                #       to support this
+                window_indices = []
+                for i in range(0, 5):
+                    if window_idx > i:
+                        window_indices.append(window_idx - 1 - i)
+                    if window_idx < len(windows) - 1 - i:
+                        window_indices.append(window_idx + 1 + i)
+                # Compute average median distance of the selected windows
+                neighbor_median_dists = [windows[i][0] for i in window_indices]
+                avg_neighbor_dist = sum(neighbor_median_dists) / len(neighbor_median_dists)
+                protrusion = avg_neighbor_dist - dist
                 if debug:
-                    print(f"[DEBUG] detect_objects: Point at ({x:.1f}, {y:.1f}), dist={dist:.1f}, window={window_idx}, window_dist={windows[window_idx][0]:.1f}, protrusion={protrusion:.1f}")
-                if protrusion > 30.0 and 120.0 <= dist <= 1200.0:  # Valid protrusion
-                    if protrusion > max_protrusion:
-                        max_protrusion = protrusion
-                        best_point = (x, y)
+                    print(f"[DEBUG] detect_objects: Point at ({x:.1f}, {y:.1f}), dist={dist:.1f}, window={window_idx}, "
+                          f"neighbor_windows={window_indices}, avg_neighbor_dist={avg_neighbor_dist:.1f}, protrusion={protrusion:.1f}")
+                # Add convexity and cluster checks for robustness
+                #if protrusion > 30.0 and 120.0 <= dist <= 1200.0:
+                #    # Check if point is part of a small convex region
+                #    nearby_points = [(px, py) for px, py, _, pa in points_with_data
+                #                    if abs(pa - angle) < 0.1 and abs(math.sqrt(px**2 + py**2) - dist) < 50.0]
+                #    if len(nearby_points) >= 3:  # Require at least 3 nearby points
+                #        convexity = self._compute_convexity_score(nearby_points)
+                #        if convexity > -50.0:  # Relaxed convexity threshold
+                #            if protrusion > max_protrusion:
+                #                max_protrusion = protrusion
+                #                best_point = (x, y)
+                #                best_window_points = nearby_points
+                if protrusion > max_protrusion:
+                    max_protrusion = protrusion
+                    best_point = (x, y)
+                    best_window_points = [(x, y)]
             if best_point:
-                object_points = [(best_point[0], best_point[1])]
+                object_points = best_window_points
                 if debug:
-                    print(f"[DEBUG] detect_objects: Selected fallback point at ({best_point[0]:.1f}, {best_point[1]:.1f}), protrusion={max_protrusion:.1f}")
+                    print(f"[DEBUG] detect_objects: Selected fallback point at {best_point}, protrusion={max_protrusion:.1f}, "
+                          f"cluster_size={len(object_points)}")
             elif debug:
                 print("[DEBUG] detect_objects: No valid fallback point found")
         
