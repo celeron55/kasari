@@ -52,8 +52,8 @@ class RobotSimulator:
         plt.rcParams.update({'font.size': 12 * self.scale})
         self.fig, self.ax = plt.subplots(figsize=(8 * self.scale, 8 * self.scale))
         self.ax.set_title("Real-Time Robot LiDAR Simulation\nEvents: 0, TS: 0 ms, RPM: 0.00")
-        self.ax.set_xlabel("X (units)")
-        self.ax.set_ylabel("Y (units)")
+        self.ax.set_xlabel("X (mm)")
+        self.ax.set_ylabel("Y (mm)")
         self.ax.set_aspect('equal')
         self.ax.grid(True)
         self.sc = self.ax.scatter([], [], s=50 * self.scale, alpha=0.6, color='blue', marker='o')
@@ -65,9 +65,10 @@ class RobotSimulator:
         # Rotation direction arrow
         self.rotation_arrow = None
         
-        # Arena and object patches
-        self.arena_patch = None
-        self.object_patch = None
+        # Vector patches for closest wall, open space, and object
+        self.closest_wall_arrow = None
+        self.open_space_arrow = None
+        self.object_arrow = None
         
         # Fixed axis limits
         self.ax.set_xlim(-800, 800)
@@ -106,7 +107,7 @@ class RobotSimulator:
 
     def draw(self):
         """
-        Update and redraw the plot, including detected arena and object.
+        Update and redraw the plot, showing vectors for closest wall, open space, and object.
         """
         if self.debug:
             print(f"Draw called with {len(self.detector.points)} points in detector")
@@ -117,7 +118,7 @@ class RobotSimulator:
             self.point_history.popleft()
         
         # Combine points from history for visualization
-        all_points = [(x, y) for ts, batch in self.point_history for x, y in batch]  # Changed to unpack (x, y)
+        all_points = [(x, y) for ts, batch in self.point_history for x, y in batch]
         offsets = np.array(all_points) if all_points else np.empty((0, 2))
         if self.debug and len(offsets) > 0:
             print(f"Drawing {len(offsets)} points, range x: {offsets[:, 0].min():.2f} to {offsets[:, 0].max():.2f}, "
@@ -153,32 +154,40 @@ class RobotSimulator:
                                                               color='black')
             self.ax.add_patch(self.rotation_arrow)
         
-        # Update arena and object visualization
-        if self.arena_patch:
-            self.arena_patch.remove()
-            self.arena_patch = None
-        if self.object_patch:
-            self.object_patch.remove()
-            self.object_patch = None
+        # Update vector visualizations
+        if self.closest_wall_arrow:
+            self.closest_wall_arrow.remove()
+            self.closest_wall_arrow = None
+        if self.open_space_arrow:
+            self.open_space_arrow.remove()
+            self.open_space_arrow = None
+        if self.object_arrow:
+            self.object_arrow.remove()
+            self.object_arrow = None
         
-        # Detect objects using detector's points (already time-filtered)
-        arena, object_pos = self.detector.detect_objects(self.detector.points)
-        width, height = arena['size']
-        angle = arena['angle']
-        pos_x, pos_y = arena['position']
+        # Detect objects
+        closest_wall, open_space, object_pos = self.detector.detect_objects(self.detector.points)
         
-        # Draw arena
-        self.arena_patch = patches.Rectangle(
-            (pos_x - width/2, pos_y - height/2), width, height,
-            angle=math.degrees(angle), color='green', alpha=0.2
-        )
-        self.ax.add_patch(self.arena_patch)
+        # Draw closest wall vector (green)
+        if closest_wall != (0.0, 0.0):
+            self.closest_wall_arrow = patches.FancyArrowPatch((0, 0), closest_wall,
+                                                             arrowstyle="->", mutation_scale=20 * self.scale,
+                                                             color='green')
+            self.ax.add_patch(self.closest_wall_arrow)
         
-        # Draw object
-        self.object_patch = patches.Circle(
-            object_pos, radius=50, color='purple', alpha=0.5
-        )
-        self.ax.add_patch(self.object_patch)
+        # Draw open space vector (blue)
+        if open_space != (0.0, 0.0):
+            self.open_space_arrow = patches.FancyArrowPatch((0, 0), open_space,
+                                                            arrowstyle="->", mutation_scale=20 * self.scale,
+                                                            color='blue')
+            self.ax.add_patch(self.open_space_arrow)
+        
+        # Draw object vector (purple)
+        if object_pos != (100.0, 100.0):
+            self.object_arrow = patches.FancyArrowPatch((0, 0), object_pos,
+                                                       arrowstyle="->", mutation_scale=20 * self.scale,
+                                                       color='purple')
+            self.ax.add_patch(self.object_arrow)
         
         self.ax.set_title(f"Real-Time Robot LiDAR Simulation\nEvents: {self.event_count}, TS: {self.detector.last_ts // 1000 if self.detector.last_ts else 0} ms, RPM: {self.detector.rpm:.2f}")
         self.canvas.draw()
@@ -192,17 +201,20 @@ class RobotSimulator:
         self.virtual_elapsed = 0.0
         self.step_requested = False
         self.running = True
-        self.point_history = deque(maxlen=100)  # Reset with maxlen
+        self.point_history = deque(maxlen=100)
         self.current_lidar_points = []
         if self.rotation_arrow:
             self.rotation_arrow.remove()
             self.rotation_arrow = None
-        if self.arena_patch:
-            self.arena_patch.remove()
-            self.arena_patch = None
-        if self.object_patch:
-            self.object_patch.remove()
-            self.object_patch = None
+        if self.closest_wall_arrow:
+            self.closest_wall_arrow.remove()
+            self.closest_wall_arrow = None
+        if self.open_space_arrow:
+            self.open_space_arrow.remove()
+            self.open_space_arrow = None
+        if self.object_arrow:
+            self.object_arrow.remove()
+            self.object_arrow = None
         self.sc.set_offsets(np.empty((0, 2)))
         self.highlight_sc.set_offsets(np.empty((0, 2)))
         self.heading_line.set_data([0, 0], [0, 0])
@@ -293,7 +305,6 @@ def process_events(source, sim: RobotSimulator, is_file: bool = True, max_events
                     sim.detector.update(event)
                     if event[0] == "Lidar":
                         found_lidar = True
-                        # Add new points from this event
                         new_points = [(x, y) for x, y, _ in sim.detector.points[-len(event[2:6]):]]
                         sim.current_lidar_points = new_points
                     current_event_idx += 1
@@ -303,7 +314,6 @@ def process_events(source, sim: RobotSimulator, is_file: bool = True, max_events
                 if found_lidar:
                     sim.point_history.append((sim.detector.last_ts, new_points))
                     sim.draw()
-                    # Update batch timing
                     if current_event_idx > 0:
                         last_processed_ts = events[current_event_idx - 1][1]
                         sim.virtual_elapsed = (last_processed_ts - first_ts) / 1_000_000
@@ -321,7 +331,6 @@ def process_events(source, sim: RobotSimulator, is_file: bool = True, max_events
                     event = events[current_event_idx]
                     sim.detector.update(event)
                     if event[0] == "Lidar":
-                        # Add new points from this event
                         new_points.extend([(x, y) for x, y, _ in sim.detector.points[-len(event[2:6]):]])
                     current_event_idx += 1
                     processed += 1
