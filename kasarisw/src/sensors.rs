@@ -28,8 +28,13 @@ pub const HEAD_BYTE: u8 = 0xFA;
 // Experimentally tuned to maximize baud usage. This minimizes the effect
 // buffering at the sending end has in terms of timing noise. The LIDAR buffers
 // at least a couple of packets before sending them.
-// 86 Hz is too fast and 85 Hz works, so we use 83 Hz to have some margin.
-pub const LIDAR_ENCODER_HZ: f32 = 83.0;
+// * 86 Hz is too fast and 85 Hz works in terms of data transfer, so we could
+//   use 83 Hz in terms of that. However...
+// * 83 Hz doesn't work because at that rate the LIDAR gives up actually
+//   measuring stuff and returns 17mm for the last half of its data buffering
+//   cycle (the data buffering cycle is about 7 messages). In terms of this, 81
+//   Hz appears to not work and 80 Hz appears to work, so we use 80 Hz.
+pub const LIDAR_ENCODER_HZ: f32 = 80.0;
 
 #[embassy_executor::task]
 pub async fn lidar_writer(
