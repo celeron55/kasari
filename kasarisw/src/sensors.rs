@@ -25,6 +25,11 @@ use crate::LIDAR_EVENT_QUEUE_REF;
 // LIDAR constants
 pub const PACKET_SIZE: usize = 22;
 pub const HEAD_BYTE: u8 = 0xFA;
+// Experimentally tuned to maximize baud usage. This minimizes the effect
+// buffering at the sending end has in terms of timing noise. The LIDAR buffers
+// at least a couple of packets before sending them.
+// 86 Hz is too fast and 85 Hz works, so we use 83 Hz to have some margin.
+pub const LIDAR_ENCODER_HZ: f32 = 83.0;
 
 #[embassy_executor::task]
 pub async fn lidar_writer(

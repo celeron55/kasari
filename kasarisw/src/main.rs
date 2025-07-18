@@ -175,7 +175,7 @@ async fn main(spawner: Spawner) {
         .configure(ledc_timer::config::Config {
             duty: ledc_timer::config::Duty::Duty8Bit,
             clock_source: ledc_timer::LSClockSource::APBClk,
-            frequency: Rate::from_hz(60.0 as u32),
+            frequency: Rate::from_hz(sensors::LIDAR_ENCODER_HZ as u32),
         })
         .unwrap();
 
