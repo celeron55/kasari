@@ -193,18 +193,17 @@ class ObjectDetector:
                 idx = j % len(points)
                 window.append((points_with_data[idx][0], points_with_data[idx][1]))
             
-            convexity = self._compute_convexity_score(window)
             distances = [points_with_data[j % len(points)][2] for j in range(i, i + wall_window_size)]
             median_dist = sorted(distances)[len(distances) // 2]
             window_points = [(points_with_data[j % len(points)][0], points_with_data[j % len(points)][1]) 
                              for j in range(i, i + wall_window_size)]
             
             if debug:
-                print(f"[DEBUG] detect_objects: Wall window {i}, points={len(window)}, convexity={convexity}, median_dist={median_dist}")
+                print(f"[DEBUG] detect_objects: Wall window {i}, points={len(window)}, median_dist={median_dist}")
             
-            windows.append((median_dist, window_points, convexity))
+            windows.append((median_dist, window_points))
             
-            if convexity <= 0.0 and 120.0 <= median_dist <= 1500.0:  # Wall: straight/concave
+            if 120.0 <= median_dist <= 1500.0:  # Wall: no convexity requirement
                 if median_dist < min_dist:
                     min_dist = median_dist
                     closest_wall_points = window_points
@@ -212,8 +211,7 @@ class ObjectDetector:
                     max_dist = median_dist
                     open_space_points = window_points
         
-        # Primary method: find two most sudden distance changes
-        # This is needed for low-speed LIDAR operation
+        # Primary method: find object regions
         distance_changes = []
         for i in range(len(windows) - 1):
             dist_diff = abs(windows[i + 1][0] - windows[i][0])
@@ -222,18 +220,18 @@ class ObjectDetector:
         # Sort by magnitude of distance change
         distance_changes.sort(key=lambda x: x[0], reverse=True)
         
-        # Find the best pair of transitions (4 to 30 windows apart)
+        # Find the best region (paired or single distance changes)
         best_score = -float('inf')
         best_region = None
         object_points = []
         
+        # Paired distance changes
         for i in range(len(distance_changes)):
             for j in range(i + 1, len(distance_changes)):
                 idx1, idx2 = distance_changes[i][1], distance_changes[j][1]
                 if idx1 > idx2:
                     idx1, idx2 = idx2, idx1
                 if 4 <= idx2 - idx1 <= 30:  # Window separation constraint
-                    # Check if middle region is closer
                     middle_dists = [windows[k][0] for k in range(idx1 + 1, idx2)]
                     if not middle_dists:
                         continue
@@ -241,36 +239,47 @@ class ObjectDetector:
                     start_dist = windows[idx1][0]
                     end_dist = windows[idx2][0]
                     if avg_middle_dist < min(start_dist, end_dist) - 80.0:  # Middle must be significantly closer
-                        # Compute depth
                         depth = min(start_dist, end_dist) - avg_middle_dist
-                        # Collect points in the middle region
                         region_points = []
                         for k in range(idx1 + 1, idx2):
                             region_points.extend(windows[k][1])
-                        if len(region_points) < 5:
+                        if len(region_points) < 2:
                             continue
-                        # Compute convexity of the region
-                        convexity = self._compute_convexity_score(region_points)
-                        # Score based on depth and number of points
-                        score = depth * len(region_points)
+                        score = depth * len(region_points)  # Paired change score
                         if debug:
-                            print(f"[DEBUG] detect_objects: Candidate region {idx1+1} to {idx2-1}, points={len(region_points)}, avg_dist={avg_middle_dist:.1f}, depth={depth:.1f}, convexity={convexity:.1f}, score={score:.4f}")
-                        if depth > 80.0 and convexity > -100.0 and 120.0 <= avg_middle_dist <= 1200.0:  # Valid object
+                            print(f"[DEBUG] detect_objects: Paired region {idx1+1} to {idx2-1}, points={len(region_points)}, avg_dist={avg_middle_dist:.1f}, depth={depth:.1f}, score={score:.4f}")
+                        if depth > 80.0 and 120.0 <= avg_middle_dist <= 1200.0:
                             if score > best_score:
                                 best_score = score
                                 best_region = (idx1 + 1, idx2, region_points, avg_middle_dist)
         
+        # Single distance changes
+        for dist_diff, idx in distance_changes:
+            if dist_diff < 80.0:  # Skip small changes
+                continue
+            if idx + 1 < len(windows) and windows[idx + 1][0] < windows[idx][0] - 80.0:
+                avg_middle_dist = windows[idx + 1][0]
+                region_points = windows[idx + 1][1]
+                if len(region_points) < 2:
+                    continue
+                depth = windows[idx][0] - avg_middle_dist
+                score = depth * len(region_points) * 0.5  # Lower score for single changes
+                if debug:
+                    print(f"[DEBUG] detect_objects: Single region at window {idx+1}, points={len(region_points)}, avg_dist={avg_middle_dist:.1f}, depth={depth:.1f}, score={score:.4f}")
+                if depth > 80.0 and 120.0 <= avg_middle_dist <= 1200.0:
+                    if score > best_score:
+                        best_score = score
+                        best_region = (idx + 1, idx + 2, region_points, avg_middle_dist)
+        
         # Fallback method: point-based protrusion check
-        # This is needed for high-speed LIDAR operation
         if not best_region:
             max_protrusion = -float('inf')
             best_point = None
             best_window_points = []
             for point in points_with_data:
                 x, y, dist, angle = point
-                # Find the window containing this point
                 window_idx = None
-                for i, (median_dist, window_points, _) in enumerate(windows):
+                for i, (median_dist, window_points) in enumerate(windows):
                     for wp in window_points:
                         if abs(wp[0] - x) < 1e-6 and abs(wp[1] - y) < 1e-6:
                             window_idx = i
@@ -279,42 +288,25 @@ class ObjectDetector:
                         break
                 if window_idx is None:
                     continue
-                # Use neighboring windows for protrusion calculation
-                # The current window is not used as we assume this point is part
-                # of a small cluster of protruding points, which alters the
-                # window median distance
-                # TODO: This is unable to add windows in a balanced manner on
-                #       the first few points. Implement wrapping for the indices
-                #       to support this
                 window_indices = []
                 for i in range(0, 3):
                     if window_idx > i:
                         window_indices.append(window_idx - 1 - i)
                     if window_idx < len(windows) - 1 - i:
                         window_indices.append(window_idx + 1 + i)
-                # Compute average median distance of the selected windows
+                if len(window_indices) < 2:  # Require at least 2 neighbor windows
+                    continue
                 neighbor_median_dists = [windows[i][0] for i in window_indices]
                 avg_neighbor_dist = sum(neighbor_median_dists) / len(neighbor_median_dists)
                 protrusion = avg_neighbor_dist - dist
                 if debug:
                     print(f"[DEBUG] detect_objects: Point at ({x:.1f}, {y:.1f}), dist={dist:.1f}, window={window_idx}, "
                           f"neighbor_windows={window_indices}, avg_neighbor_dist={avg_neighbor_dist:.1f}, protrusion={protrusion:.1f}")
-                # Add convexity and cluster checks for robustness
-                #if protrusion > 30.0 and 120.0 <= dist <= 1200.0:
-                #    # Check if point is part of a small convex region
-                #    nearby_points = [(px, py) for px, py, _, pa in points_with_data
-                #                    if abs(pa - angle) < 0.1 and abs(math.sqrt(px**2 + py**2) - dist) < 50.0]
-                #    if len(nearby_points) >= 3:  # Require at least 3 nearby points
-                #        convexity = self._compute_convexity_score(nearby_points)
-                #        if convexity > -50.0:  # Relaxed convexity threshold
-                #            if protrusion > max_protrusion:
-                #                max_protrusion = protrusion
-                #                best_point = (x, y)
-                #                best_window_points = nearby_points
-                if protrusion > max_protrusion:
-                    max_protrusion = protrusion
-                    best_point = (x, y)
-                    best_window_points = [(x, y)]
+                if protrusion > 50.0 and 120.0 <= dist <= 1200.0:
+                    if protrusion > max_protrusion:
+                        max_protrusion = protrusion
+                        best_point = (x, y)
+                        best_window_points = [(x, y)]
             if best_point:
                 object_points = best_window_points
                 if debug:
