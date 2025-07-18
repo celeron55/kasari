@@ -165,8 +165,8 @@ class RobotSimulator:
             self.object_arrow.remove()
             self.object_arrow = None
         
-        # Detect objects
-        closest_wall, open_space, object_pos = self.detector.detect_objects(self.detector.points)
+        # Detect objects with debug flag
+        closest_wall, open_space, object_pos = self.detector.detect_objects(self.detector.points, debug=self.debug)
         
         # Draw closest wall vector (green)
         if closest_wall != (0.0, 0.0):
