@@ -129,31 +129,6 @@ class ObjectDetector:
             self.last_lidar_theta = self.theta
             print(f"[DEBUG] update: Added {len(points_this_event)} LiDAR points")
 
-    def _compute_convexity_score(self, points: List[Tuple[float, float]]) -> float:
-        """
-        Compute convexity score for a set of points using cross products.
-        
-        Parameters:
-        points: List of (x, y) coordinates.
-        
-        Returns:
-        float: Convexity score (positive for convex, negative for concave, near-zero for straight).
-        """
-        if len(points) < 3:
-            return 0.0
-        
-        sorted_points = sorted(points, key=lambda p: math.atan2(p[1], p[0]) % (2 * math.pi))
-        convexity = 0.0
-        for i in range(len(sorted_points)):
-            p1 = sorted_points[i]
-            p2 = sorted_points[(i + 1) % len(sorted_points)]
-            p3 = sorted_points[(i + 2) % len(sorted_points)]
-            v1x, v1y = p2[0] - p1[0], p2[1] - p1[1]
-            v2x, v2y = p3[0] - p2[0], p3[1] - p2[1]
-            cross = v1x * v2y - v1y * v2x
-            convexity += cross
-        return convexity / len(sorted_points)
-
     def detect_objects(self, points: List[Tuple[float, float, float]], debug: bool = False) -> Tuple[Tuple[float, float], Tuple[float, float], Tuple[float, float]]:
         """
         Detect closest wall, biggest open space, and object using window-based distance changes,
