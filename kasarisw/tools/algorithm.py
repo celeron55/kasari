@@ -213,6 +213,7 @@ class ObjectDetector:
                     open_space_points = window_points
         
         # Primary method: find two most sudden distance changes
+        # This is needed for low-speed LIDAR operation
         distance_changes = []
         for i in range(len(windows) - 1):
             dist_diff = abs(windows[i + 1][0] - windows[i][0])
@@ -260,6 +261,7 @@ class ObjectDetector:
                                 best_region = (idx1 + 1, idx2, region_points, avg_middle_dist)
         
         # Fallback method: point-based protrusion check
+        # This is needed for high-speed LIDAR operation
         if not best_region:
             max_protrusion = -float('inf')
             best_point = None
