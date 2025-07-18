@@ -36,7 +36,7 @@ class RobotSimulator:
         self.speed = {'play': 1.0, 'slow': 0.25, 'pause': 0.0, 'step': 0.0}
         self.virtual_elapsed = 0.0
         self.step_requested = False
-        self.point_history = deque()
+        self.point_history = deque(maxlen=100)  # Store up to 100 batches
         self.current_lidar_points = []
         
         self.running = True
@@ -109,12 +109,15 @@ class RobotSimulator:
         Update and redraw the plot, including detected arena and object.
         """
         if self.debug:
-            print(f"Draw called with {len(self.detector.points)} points")
+            print(f"Draw called with {len(self.detector.points)} points in detector")
         current_ts = self.detector.last_ts if self.detector.last_ts else 0
         fade_time_us = 100_000 if self.detector.rpm == 0.0 else 1.1 * 60 * 1_000_000 / abs(self.detector.rpm)
+        # Remove old points from history
         while self.point_history and self.point_history[0][0] < current_ts - fade_time_us:
             self.point_history.popleft()
-        all_points = [pt for ts, batch in self.point_history for pt in batch]
+        
+        # Combine points from history for visualization
+        all_points = [(x, y) for ts, batch in self.point_history for x, y in batch]  # Changed to unpack (x, y)
         offsets = np.array(all_points) if all_points else np.empty((0, 2))
         if self.debug and len(offsets) > 0:
             print(f"Drawing {len(offsets)} points, range x: {offsets[:, 0].min():.2f} to {offsets[:, 0].max():.2f}, "
@@ -158,7 +161,7 @@ class RobotSimulator:
             self.object_patch.remove()
             self.object_patch = None
         
-        # Detect objects
+        # Detect objects using detector's points (already time-filtered)
         arena, object_pos = self.detector.detect_objects(self.detector.points)
         width, height = arena['size']
         angle = arena['angle']
@@ -189,7 +192,7 @@ class RobotSimulator:
         self.virtual_elapsed = 0.0
         self.step_requested = False
         self.running = True
-        self.point_history = deque()
+        self.point_history = deque(maxlen=100)  # Reset with maxlen
         self.current_lidar_points = []
         if self.rotation_arrow:
             self.rotation_arrow.remove()
@@ -259,7 +262,7 @@ def process_events(source, sim: RobotSimulator, is_file: bool = True, max_events
     first_ts = events[0][1]
     last_real = time.time()
     current_event_idx = 0
-    interval_us = 20000
+    interval_us = 20000  # 20ms batches
     batch_start_sim_ts = first_ts
     batch_end_ts = batch_start_sim_ts + interval_us
     
@@ -284,41 +287,49 @@ def process_events(source, sim: RobotSimulator, is_file: bool = True, max_events
                 sim.step_requested = False
                 processed = 0
                 found_lidar = False
+                new_points = []
                 while current_event_idx < len(events) and not found_lidar:
                     event = events[current_event_idx]
                     sim.detector.update(event)
                     if event[0] == "Lidar":
                         found_lidar = True
+                        # Add new points from this event
+                        new_points = [(x, y) for x, y, _ in sim.detector.points[-len(event[2:6]):]]
+                        sim.current_lidar_points = new_points
                     current_event_idx += 1
                     processed += 1
                 if debug:
                     print(f"Processed {processed} events in step mode")
                 if found_lidar:
-                    sim.point_history.append((sim.detector.last_ts, sim.detector.points.copy()))
-                    sim.detector.points = []
+                    sim.point_history.append((sim.detector.last_ts, new_points))
+                    sim.draw()
+                    # Update batch timing
                     if current_event_idx > 0:
                         last_processed_ts = events[current_event_idx - 1][1]
                         sim.virtual_elapsed = (last_processed_ts - first_ts) / 1_000_000
                         batch_start_sim_ts = last_processed_ts
                         batch_end_ts = last_processed_ts + interval_us
-                    sim.draw()
                 else:
                     print("No more LiDAR events.")
         elif sim.mode in ['play', 'slow']:
             if current_sim_ts >= batch_end_ts:
                 processed = 0
+                new_points = []
                 while current_event_idx < len(events) and events[current_event_idx][1] < batch_end_ts:
                     if debug:
                         print(f"Processing event {current_event_idx}: {events[current_event_idx][0]} at ts={events[current_event_idx][1]}")
                     event = events[current_event_idx]
                     sim.detector.update(event)
+                    if event[0] == "Lidar":
+                        # Add new points from this event
+                        new_points.extend([(x, y) for x, y, _ in sim.detector.points[-len(event[2:6]):]])
                     current_event_idx += 1
                     processed += 1
                 if debug:
                     print(f"Processed {processed} events in batch")
                 
-                sim.point_history.append((sim.detector.last_ts, sim.detector.points.copy()))
-                sim.detector.points = []
+                if new_points:
+                    sim.point_history.append((sim.detector.last_ts, new_points))
                 
                 sim.draw()
                 batch_start_sim_ts = batch_end_ts
