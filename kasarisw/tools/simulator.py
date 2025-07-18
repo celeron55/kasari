@@ -187,8 +187,8 @@ class RobotSimulator:
         
         if event_type == "Accelerometer":
             raw_accel_y = event[2]  # Assume Y is the radial acceleration
-            # Apply EMA lowpass filter (alpha=0.05 for smoothing)
-            self.smoothed_accel_y = 0.05 * raw_accel_y + 0.95 * self.smoothed_accel_y
+            # Apply EMA lowpass filter (alpha=0.2 for smoothing)
+            self.smoothed_accel_y = 0.2 * raw_accel_y + 0.8 * self.smoothed_accel_y
             accel_y = self.smoothed_accel_y  # Use smoothed value
 
             if not self.calibration_done:
