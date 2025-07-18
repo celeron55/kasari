@@ -1,26 +1,23 @@
-import math
 import matplotlib
 matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
 import time
-from typing import List, Tuple, Union
+from typing import List, Tuple
 import json
 import sys
 import numpy as np
 import argparse
 import matplotlib.patches as patches
 import tkinter as tk
+import math
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from collections import deque
-
-POINT_HISTORY_STEPS = None
+from algorithm import ObjectDetector
 
 class RobotSimulator:
     """
-    A simulator class for replaying robot events in real-time.
-    
-    Processes streamed events to update robot rotation and collect LiDAR points.
-    Provides methods to update with new events and draw the current plot.
+    A simulator class for replaying robot events in real-time with visualization.
+    Interfaces with ObjectDetector for data processing.
     """
     
     def __init__(self, debug=False):
@@ -28,31 +25,19 @@ class RobotSimulator:
         Initialize the simulator.
         """
         self.debug = debug
-        self.theta = 0.0  # Current angular position (radians)
-        self.rpm = 0.0  # Current rotational speed (RPM)
-        self.last_ts = None  # Last timestamp (initialize to None)
-        self.points: List[Tuple[float, float]] = []  # Accumulated (x, y) points from LiDAR in current batch
+        self.detector = ObjectDetector()
         self.event_count = 0  # Counter for processed events
-        self.last_lidar_theta = 0.0  # Theta at the last LiDAR event
         
         # Scale factor for high-DPI
         self.scale = 2.0
-        
-        # Calibration
-        self.accel_offset = 0.0
-        self.calibration_samples = []
-        self.calibration_done = False
-        self.CALIBRATION_COUNT = 10
-        self.CALIBRATION_MIN_G = -8.0
-        self.CALIBRATION_MAX_G = 8.0
-
-        self.smoothed_accel_y = 0.0
         
         # Playback controls
         self.mode = 'play'
         self.speed = {'play': 1.0, 'slow': 0.25, 'pause': 0.0, 'step': 0.0}
         self.virtual_elapsed = 0.0
         self.step_requested = False
+        self.point_history = deque()
+        self.current_lidar_points = []
         
         self.running = True
         self.after_id = None
@@ -75,11 +60,14 @@ class RobotSimulator:
         self.highlight_sc = self.ax.scatter([], [], s=60 * self.scale, alpha=1.0, color='red', marker='o')
         
         # Heading indicator (line from center)
-        self.heading_line, = self.ax.plot([0, math.cos(self.theta) * 200 * self.scale], [0, math.sin(self.theta) * 200 * self.scale],
-                                          color='r', linewidth=2 * self.scale)
+        self.heading_line, = self.ax.plot([0, 0], [0, 0], color='r', linewidth=2 * self.scale)
         
         # Rotation direction arrow
         self.rotation_arrow = None
+        
+        # Arena and object patches
+        self.arena_patch = None
+        self.object_patch = None
         
         # Fixed axis limits
         self.ax.set_xlim(-800, 800)
@@ -116,127 +104,14 @@ class RobotSimulator:
                 if self.debug:
                     print("Advancing to next LiDAR event.")
 
-    def accel_to_rpm(self, accel_g: float) -> float:
-        """
-        Convert acceleration in g to RPM.
-        
-        Parameters:
-        accel_g (float): Acceleration measured by the accelerometer in g.
-        
-        Returns:
-        float: Rotational speed in revolutions per minute (RPM).
-        """
-        g = 9.81  # Acceleration due to gravity in m/s²
-        r = 0.0145  # Radius in meters
-        
-        # Apply offset
-        a_calibrated = accel_g - self.accel_offset
-        
-        # Convert acceleration to m/s²
-        a = a_calibrated * g
-        
-        # Calculate angular velocity ω in rad/s
-        omega = math.sqrt(abs(a) / r)
-        if a < 0:
-            omega = -omega  # Preserve direction
-        
-        # Convert to RPM
-        rpm = (omega * 60) / (2 * math.pi)
-        
-        return rpm
-
-    def update(self, event: Union[list, dict]):
-        """
-        Update the simulation state with a new event.
-        
-        Parameters:
-        event (Union[list, dict]): Event as list [type, ts, ...data] or dict equivalent.
-        """
-        if isinstance(event, dict):
-            # Convert dict to list format if needed (e.g., from JSON)
-            event_type = event.get('type')
-            ts = event.get('ts')
-            data = event.get('data', [])
-            event = [event_type, ts] + data
-        
-        event_type = event[0]
-        original_ts = ts = event[1]
-        
-        if event_type == "WifiControl":
-            # Skip time/theta update due to different ts base; process if needed in future
-            return
-        
-        if self.last_ts is None:
-            self.last_ts = ts
-            return  # Initial event, no dt
-        
-        if event_type == "Lidar":
-            if self.debug:
-                print(f"Lidar event at original ts={original_ts}, current theta={self.theta}, last_lidar_theta={self.last_lidar_theta}")
-        
-        # Calculate time delta (assume ts in microseconds, convert to seconds)
-        dt = (ts - self.last_ts) / 1_000_000.0
-        if dt < 0:
-            return  # Skip if timestamp decreases (though we prevented it for LiDAR)
-        
-        # Update angular position based on current RPM
-        self.theta += (self.rpm / 60.0) * 2 * math.pi * dt
-        self.theta %= (2 * math.pi)
-        
-        self.last_ts = ts
-        
-        if event_type == "Accelerometer":
-            raw_accel_y = event[2]  # Assume Y is the radial acceleration
-            # Apply EMA lowpass filter (alpha=0.2 for smoothing)
-            self.smoothed_accel_y = 0.2 * raw_accel_y + 0.8 * self.smoothed_accel_y
-            accel_y = self.smoothed_accel_y  # Use smoothed value
-
-            if not self.calibration_done:
-                if self.CALIBRATION_MIN_G <= raw_accel_y <= self.CALIBRATION_MAX_G:
-                    self.calibration_samples.append(raw_accel_y)
-                if len(self.calibration_samples) >= self.CALIBRATION_COUNT:
-                    self.accel_offset = sum(self.calibration_samples) / len(self.calibration_samples)
-                    self.calibration_done = True
-                    print(f"Calibration complete. Offset: {self.accel_offset:.2f} G")
-            if self.calibration_done:
-                self.rpm = self.accel_to_rpm(accel_y)
-        
-        elif event_type == "Lidar":
-            # Each measurement within the event is spaced by a certain amount of
-            # time (1.67ms) so use a speed dependent step_theta
-            delta_theta = 0.00167 * ((self.rpm / 60.0) * 2 * math.pi) if self.rpm != 0.0 else 0
-            distances = event[2:6]  # d1, d2, d3, d4
-            step_theta = delta_theta / len(distances)
-            if self.debug:
-                print(f"Lidar processing: distances={distances}, delta_theta={delta_theta}, step_theta={step_theta}")
-            
-            points_this_event = []
-            for i, d in enumerate(distances):
-                if d > 0:  # Valid distance (filter out invalid/zero)
-                    # Angle for this beam
-                    angle = self.theta - (len(distances) - i - 1.0) * step_theta
-                    x = d * math.cos(angle)
-                    y = d * math.sin(angle)
-                    points_this_event.append((x, y))
-                    if self.debug:
-                        print(f"Adding point: {i=}, d={d}, angle={angle}, x={x}, y={y}, total points now={len(self.points)}")
-            # Add to current batch
-            self.points.extend(points_this_event)
-            # If in stepping mode, highlight these points
-            if self.mode == 'step':
-                self.current_lidar_points = points_this_event
-            self.last_lidar_theta = self.theta  # Update for next
-        
-        self.event_count += 1
-
     def draw(self):
         """
-        Update and redraw the plot.
+        Update and redraw the plot, including detected arena and object.
         """
         if self.debug:
-            print(f"Draw called with {len(self.points)} points")
-        current_ts = self.last_ts if self.last_ts else 0
-        fade_time_us = 100_000 if self.rpm == 0.0 else 1.1 * 60 * 1_000_000 / abs(self.rpm)  # Dynamic fade time; 1.1 rotations
+            print(f"Draw called with {len(self.detector.points)} points")
+        current_ts = self.detector.last_ts if self.detector.last_ts else 0
+        fade_time_us = 100_000 if self.detector.rpm == 0.0 else 1.1 * 60 * 1_000_000 / abs(self.detector.rpm)
         while self.point_history and self.point_history[0][0] < current_ts - fade_time_us:
             self.point_history.popleft()
         all_points = [pt for ts, batch in self.point_history for pt in batch]
@@ -247,13 +122,13 @@ class RobotSimulator:
         self.sc.set_offsets(offsets)
         
         # Highlight current LiDAR points
-        highlight_offsets = np.array(self.current_lidar_points) if hasattr(self, 'current_lidar_points') and self.current_lidar_points else np.empty((0, 2))
+        highlight_offsets = np.array(self.current_lidar_points) if self.current_lidar_points else np.empty((0, 2))
         self.highlight_sc.set_offsets(highlight_offsets)
         
         # Update heading line
-        heading_length = 200 * self.scale  # Fixed length for visibility
-        self.heading_line.set_data([0, math.cos(self.theta) * heading_length],
-                                   [0, math.sin(self.theta) * heading_length])
+        heading_length = 200 * self.scale
+        self.heading_line.set_data([0, math.cos(self.detector.theta) * heading_length],
+                                   [0, math.sin(self.detector.theta) * heading_length])
         
         # Update rotation direction arrow
         if self.rotation_arrow:
@@ -262,8 +137,8 @@ class RobotSimulator:
         
         arrow_length = 200 * self.scale
         y_pos = 700
-        if self.rpm != 0:
-            if self.rpm > 0:  # CCW, point left
+        if self.detector.rpm != 0:
+            if self.detector.rpm > 0:  # CCW, point left
                 self.rotation_arrow = patches.FancyArrowPatch((arrow_length, y_pos), (0, y_pos),
                                                               connectionstyle="arc3,rad=0.5",
                                                               arrowstyle="->", mutation_scale=20 * self.scale,
@@ -275,21 +150,41 @@ class RobotSimulator:
                                                               color='black')
             self.ax.add_patch(self.rotation_arrow)
         
-        self.ax.set_title(f"Real-Time Robot LiDAR Simulation\nEvents: {self.event_count}, TS: {self.last_ts // 1000 if self.last_ts else 0} ms, RPM: {self.rpm:.2f}")
+        # Update arena and object visualization
+        if self.arena_patch:
+            self.arena_patch.remove()
+            self.arena_patch = None
+        if self.object_patch:
+            self.object_patch.remove()
+            self.object_patch = None
+        
+        # Detect objects
+        arena, object_pos = self.detector.detect_objects(self.detector.points)
+        width, height = arena['size']
+        angle = arena['angle']
+        pos_x, pos_y = arena['position']
+        
+        # Draw arena
+        self.arena_patch = patches.Rectangle(
+            (pos_x - width/2, pos_y - height/2), width, height,
+            angle=math.degrees(angle), color='green', alpha=0.2
+        )
+        self.ax.add_patch(self.arena_patch)
+        
+        # Draw object
+        self.object_patch = patches.Circle(
+            object_pos, radius=50, color='purple', alpha=0.5
+        )
+        self.ax.add_patch(self.object_patch)
+        
+        self.ax.set_title(f"Real-Time Robot LiDAR Simulation\nEvents: {self.event_count}, TS: {self.detector.last_ts // 1000 if self.detector.last_ts else 0} ms, RPM: {self.detector.rpm:.2f}")
         self.canvas.draw()
         self.canvas.flush_events()
 
     def reset(self):
         """Reset the simulation state."""
-        self.theta = 0.0
-        self.rpm = 0.0
-        self.last_ts = None
-        self.points = []
+        self.detector.reset()
         self.event_count = 0
-        self.accel_offset = 0.0
-        self.calibration_samples = []
-        self.calibration_done = False
-        self.last_lidar_theta = 0.0
         self.mode = 'play'
         self.virtual_elapsed = 0.0
         self.step_requested = False
@@ -299,9 +194,15 @@ class RobotSimulator:
         if self.rotation_arrow:
             self.rotation_arrow.remove()
             self.rotation_arrow = None
+        if self.arena_patch:
+            self.arena_patch.remove()
+            self.arena_patch = None
+        if self.object_patch:
+            self.object_patch.remove()
+            self.object_patch = None
         self.sc.set_offsets(np.empty((0, 2)))
         self.highlight_sc.set_offsets(np.empty((0, 2)))
-        self.heading_line.set_data([0, 0], [0, 0])  # Hide line initially
+        self.heading_line.set_data([0, 0], [0, 0])
         self.ax.set_title("Real-Time Robot LiDAR Simulation\nEvents: 0, TS: 0 ms, RPM: 0.00")
         self.canvas.draw()
         self.canvas.flush_events()
@@ -319,7 +220,7 @@ def process_events(source, sim: RobotSimulator, is_file: bool = True, max_events
     """
     sim.reset()
     handle = None
-    events = []  # Collect all events if file, for batching
+    events = []
     
     try:
         if is_file:
@@ -336,7 +237,7 @@ def process_events(source, sim: RobotSimulator, is_file: bool = True, max_events
                         print(f"Skipping invalid JSON line: {line.strip()}")
                         continue
         else:
-            handle = source  # Assume file-like object
+            handle = source
             for line in handle:
                 if line.strip():
                     try:
@@ -353,14 +254,12 @@ def process_events(source, sim: RobotSimulator, is_file: bool = True, max_events
         print("No events to process.")
         return
     
-    # Sort events by timestamp
     events.sort(key=lambda e: e[1])
     
-    # Initialize simulation time
     first_ts = events[0][1]
     last_real = time.time()
     current_event_idx = 0
-    interval_us = 20000  # 20ms in microseconds
+    interval_us = 20000
     batch_start_sim_ts = first_ts
     batch_end_ts = batch_start_sim_ts + interval_us
     
@@ -387,20 +286,19 @@ def process_events(source, sim: RobotSimulator, is_file: bool = True, max_events
                 found_lidar = False
                 while current_event_idx < len(events) and not found_lidar:
                     event = events[current_event_idx]
+                    sim.detector.update(event)
                     if event[0] == "Lidar":
                         found_lidar = True
-                    sim.update(event)
                     current_event_idx += 1
                     processed += 1
                 if debug:
                     print(f"Processed {processed} events in step mode")
                 if found_lidar:
-                    sim.point_history.append((sim.last_ts, sim.points.copy()))
-                    sim.points = []
-                    # Sync virtual time and batch
+                    sim.point_history.append((sim.detector.last_ts, sim.detector.points.copy()))
+                    sim.detector.points = []
                     if current_event_idx > 0:
                         last_processed_ts = events[current_event_idx - 1][1]
-                        sim.virtual_elapsed = (last_processed_ts - first_ts) / 1_000.0
+                        sim.virtual_elapsed = (last_processed_ts - first_ts) / 1_000_000
                         batch_start_sim_ts = last_processed_ts
                         batch_end_ts = last_processed_ts + interval_us
                     sim.draw()
@@ -408,20 +306,19 @@ def process_events(source, sim: RobotSimulator, is_file: bool = True, max_events
                     print("No more LiDAR events.")
         elif sim.mode in ['play', 'slow']:
             if current_sim_ts >= batch_end_ts:
-                # Process events in the current 20ms sim interval
                 processed = 0
                 while current_event_idx < len(events) and events[current_event_idx][1] < batch_end_ts:
                     if debug:
                         print(f"Processing event {current_event_idx}: {events[current_event_idx][0]} at ts={events[current_event_idx][1]}")
                     event = events[current_event_idx]
-                    sim.update(event)
+                    sim.detector.update(event)
                     current_event_idx += 1
                     processed += 1
                 if debug:
                     print(f"Processed {processed} events in batch")
                 
-                sim.point_history.append((sim.last_ts, sim.points.copy()))
-                sim.points = []
+                sim.point_history.append((sim.detector.last_ts, sim.detector.points.copy()))
+                sim.detector.points = []
                 
                 sim.draw()
                 batch_start_sim_ts = batch_end_ts
