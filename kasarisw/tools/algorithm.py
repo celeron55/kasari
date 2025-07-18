@@ -16,7 +16,6 @@ class ObjectDetector:
         self.last_ts = None  # Last timestamp
         self.points: List[Tuple[float, float, float]] = []  # (x, y, timestamp) points from LiDAR
         self.last_lidar_theta = 0.0  # Theta at last LiDAR event
-        self.last_vectors = None  # Store last vectors for smoothing (closest_wall, open_space, object)
         
         # Calibration
         self.accel_offset = 0.0
@@ -322,16 +321,6 @@ class ObjectDetector:
             cy = sum(p[1] for p in object_points) / len(object_points)
             object_pos = (cx, cy)
         
-        # Smooth vectors
-        if self.last_vectors:
-            closest_wall = (0.98 * closest_wall[0] + 0.02 * self.last_vectors[0][0],
-                            0.98 * closest_wall[1] + 0.02 * self.last_vectors[0][1])
-            open_space = (0.98 * open_space[0] + 0.02 * self.last_vectors[1][0],
-                          0.98 * open_space[1] + 0.02 * self.last_vectors[1][1])
-            object_pos = (0.98 * object_pos[0] + 0.02 * self.last_vectors[2][0],
-                          0.98 * object_pos[1] + 0.02 * self.last_vectors[2][1])
-        
-        self.last_vectors = (closest_wall, open_space, object_pos)
         print(f"[DEBUG] detect_objects: Closest wall at {closest_wall}, open space at {open_space}, object at {object_pos}")
         
         return closest_wall, open_space, object_pos
@@ -346,5 +335,4 @@ class ObjectDetector:
         self.calibration_samples = []
         self.calibration_done = False
         self.last_lidar_theta = 0.0
-        self.last_vectors = None
         self.smoothed_accel_y = 0.0
