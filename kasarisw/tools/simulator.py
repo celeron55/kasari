@@ -290,9 +290,10 @@ def process_events(source, sim: RobotSimulator, is_file: bool = True, max_events
         
         sim.virtual_elapsed += delta_real * sim.speed[sim.mode]
         current_sim_ts = first_ts + sim.virtual_elapsed * 1_000_000
-        
-        if debug:
-            print(f"Batch: sim_ts={current_sim_ts}, batch_start={batch_start_sim_ts}, batch_end={batch_end_ts}")
+
+        if sim.mode == 'play' or sim.mode == 'slow' or sim.step_requested:
+            if debug:
+                print(f"Batch: sim_ts={current_sim_ts}, batch_start={batch_start_sim_ts}, batch_end={batch_end_ts}")
         
         if sim.mode == 'step':
             if sim.step_requested:
