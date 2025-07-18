@@ -3,7 +3,8 @@ from typing import List, Tuple, Union
 
 class ObjectDetector:
     """
-    A simple class for detecting closest wall, biggest open space, and object using point cloud convexity.
+    A class for detecting closest wall, biggest open space, and object using window-based distance changes,
+    with a point-based fallback for high-speed sparse data.
     Designed for robustness and ESP32 compatibility.
     """
     def __init__(self):
@@ -120,6 +121,11 @@ class ObjectDetector:
                     x = d * math.cos(angle)
                     y = d * math.sin(angle)
                     points_this_event.append((x, y, ts))
+            # Replace old points with similar angles
+            angular_tolerance = 0.01  # radians ~0.57 degrees
+            for new_pt in points_this_event:
+                a = math.atan2(new_pt[1], new_pt[0]) % (2 * math.pi)
+                self.points = [pt for pt in self.points if min((math.atan2(pt[1], pt[0]) % (2 * math.pi) - a) % (2 * math.pi), (a - math.atan2(pt[1], pt[0]) % (2 * math.pi)) % (2 * math.pi)) > angular_tolerance]
             self.points.extend(points_this_event)
             self.last_lidar_theta = self.theta
             print(f"[DEBUG] update: Added {len(points_this_event)} LiDAR points")
@@ -151,7 +157,8 @@ class ObjectDetector:
 
     def detect_objects(self, points: List[Tuple[float, float, float]], debug: bool = False) -> Tuple[Tuple[float, float], Tuple[float, float], Tuple[float, float]]:
         """
-        Detect closest wall, biggest open space, and object using continuous-angle convexity.
+        Detect closest wall, biggest open space, and object using window-based distance changes,
+        with a point-based fallback for high-speed sparse data.
         
         Parameters:
         points: List of (x, y, timestamp) coordinates from LiDAR.
@@ -175,10 +182,11 @@ class ObjectDetector:
         
         # Wall detection: larger window
         wall_window_size = max(5, len(points) // 12)  # ~30° for walls
-        closest_wall_points = []
-        open_space_points = []
+        windows = []
         min_dist = float('inf')
         max_dist = -float('inf')
+        closest_wall_points = []
+        open_space_points = []
         
         for i in range(len(points)):
             window = []
@@ -195,6 +203,8 @@ class ObjectDetector:
             if debug:
                 print(f"[DEBUG] detect_objects: Wall window {i}, points={len(window)}, convexity={convexity}, median_dist={median_dist}")
             
+            windows.append((median_dist, window_points, convexity))
+            
             if convexity <= 0.0 and 120.0 <= median_dist <= 1500.0:  # Wall: straight/concave
                 if median_dist < min_dist:
                     min_dist = median_dist
@@ -203,84 +213,91 @@ class ObjectDetector:
                     max_dist = median_dist
                     open_space_points = window_points
         
-        # Object detection: medium window, detect edges
-        obj_window_size = max(4, len(points) // 24)  # ~15° for object
-        edge_candidates = []
+        # Primary method: find two most sudden distance changes
+        distance_changes = []
+        for i in range(len(windows) - 1):
+            dist_diff = abs(windows[i + 1][0] - windows[i][0])
+            distance_changes.append((dist_diff, i))
         
-        for i in range(len(points)):
-            window = []
-            for j in range(i, i + obj_window_size):
-                idx = j % len(points)
-                window.append((points_with_data[idx][0], points_with_data[idx][1]))
-            
-            convexity = self._compute_convexity_score(window)
-            distances = [points_with_data[j % len(points)][2] for j in range(i, i + obj_window_size)]
-            median_dist = sorted(distances)[len(distances) // 2]
-            window_points = [(points_with_data[j % len(points)][0], points_with_data[j % len(points)][1]) 
-                             for j in range(i, i + obj_window_size)]
-            start_angle = points_with_data[i][3]
-
-            depth = 0.0
-            if len(distances) > 2:
-                end_avg = (distances[0] + distances[-1]) / 2.0
-                middle_avg = sum(distances[1:-1]) / (len(distances) - 2)
-                depth = end_avg - middle_avg
-            
-            if debug:
-                print(f"[DEBUG] detect_objects: Object window {i}, points={len(window)}, convexity={convexity}, median_dist={median_dist}, start_angle={start_angle}")
-            
-            if convexity > 300.0 and depth > 50.0 and 120.0 <= median_dist <= 1200.0:  # Object edge: highly convex, with distance contrast
-                # Weight by inverse distance cubed to prefer closer objects
-                score = convexity / (median_dist ** 3)
-                edge_candidates.append((i, start_angle, window_points, convexity, median_dist, score))
+        # Sort by magnitude of distance change
+        distance_changes.sort(key=lambda x: x[0], reverse=True)
         
-        # Find paired edges and compute object center
+        # Find the best pair of transitions (4 to 30 windows apart)
+        best_score = -float('inf')
+        best_region = None
         object_points = []
-        if edge_candidates:
-            # Sort by angle
-            edge_candidates.sort(key=lambda x: x[1])
-            # Look for pairs with dynamic angle difference
-            best_pair = None
-            best_score = -float('inf')
-            
-            for i in range(len(edge_candidates)):
-                for j in range(i + 1, len(edge_candidates)):
-                    idx1, angle1, points1, convexity1, dist1, score1 = edge_candidates[i]
-                    idx2, angle2, points2, convexity2, dist2, score2 = edge_candidates[j]
-                    angle_diff = min((angle2 - angle1) % (2 * math.pi), (angle1 - angle2) % (2 * math.pi))
-                    # Dynamic min and max angle difference: ~20mm min width, ~150mm max at current dist
-                    median_dist = (dist1 + dist2) / 2
-                    min_angle_diff = 2 * math.atan2(10, median_dist)  # half width 10mm
-                    max_angle_diff = 2 * math.atan2(75, median_dist)  # half width 75mm
-                    if min_angle_diff <= angle_diff <= max_angle_diff:
-                        score = score1 + score2  # Favor high convexity and closer distance
-                        if score > best_score:
-                            best_score = score
-                            best_pair = (idx1, idx2, points1, points2, angle1, angle2, dist1, dist2)
-            
-            if best_pair:
-                idx1, idx2, points1, points2, angle1, angle2, dist1, dist2 = best_pair
-                # Compute angle range for collecting points
-                angle_min = min(angle1, angle2)
-                angle_max = max(angle1, angle2)
-                # Collect points between the edge angles
-                object_points = [(x, y) for x, y, _, angle in points_with_data 
-                                 if angle_min <= angle <= angle_max]
-                if debug:
-                    print(f"[DEBUG] detect_objects: Selected edge pair {idx1}, {idx2}, angle_diff={angle_diff}, "
-                          f"angle_min={angle_min}, angle_max={angle_max}, median_dist={median_dist}, score={best_score}, "
-                          f"points={len(object_points)}, points_list={object_points}")
         
-        # Fallback: Use highest-scoring single window if no pairs found
-        if not object_points and edge_candidates:
-            best_candidate = max(edge_candidates, key=lambda x: x[5])  # Max score
-            idx, start_angle, window_points, convexity, median_dist, score = best_candidate
-            if 120.0 <= median_dist <= 1200.0:  # Extended range for fallback
-                object_points = window_points
+        for i in range(len(distance_changes)):
+            for j in range(i + 1, len(distance_changes)):
+                idx1, idx2 = distance_changes[i][1], distance_changes[j][1]
+                if idx1 > idx2:
+                    idx1, idx2 = idx2, idx1
+                if 4 <= idx2 - idx1 <= 30:  # Window separation constraint
+                    # Check if middle region is closer
+                    middle_dists = [windows[k][0] for k in range(idx1 + 1, idx2)]
+                    if not middle_dists:
+                        continue
+                    avg_middle_dist = sum(middle_dists) / len(middle_dists)
+                    start_dist = windows[idx1][0]
+                    end_dist = windows[idx2][0]
+                    if avg_middle_dist < min(start_dist, end_dist) - 50.0:  # Middle must be significantly closer
+                        # Compute depth
+                        depth = min(start_dist, end_dist) - avg_middle_dist
+                        # Collect points in the middle region
+                        region_points = []
+                        for k in range(idx1 + 1, idx2):
+                            region_points.extend(windows[k][1])
+                        if len(region_points) < 5:
+                            continue
+                        # Compute convexity of the region
+                        convexity = self._compute_convexity_score(region_points)
+                        # Score based on depth and number of points
+                        score = depth * len(region_points)
+                        if debug:
+                            print(f"[DEBUG] detect_objects: Candidate region {idx1+1} to {idx2-1}, points={len(region_points)}, avg_dist={avg_middle_dist:.1f}, depth={depth:.1f}, convexity={convexity:.1f}, score={score:.4f}")
+                        if depth > 50.0 and convexity > -100.0 and 120.0 <= avg_middle_dist <= 1200.0:  # Valid object
+                            if score > best_score:
+                                best_score = score
+                                best_region = (idx1 + 1, idx2, region_points, avg_middle_dist)
+        
+        # Fallback method: point-based protrusion check
+        if not best_region:
+            max_protrusion = -float('inf')
+            best_point = None
+            for point in points_with_data:
+                x, y, dist, angle = point
+                # Find the wall window containing this point
+                window_idx = None
+                for i, (median_dist, window_points, _) in enumerate(windows):
+                    for wp in window_points:
+                        if abs(wp[0] - x) < 1e-6 and abs(wp[1] - y) < 1e-6:
+                            window_idx = i
+                            break
+                    if window_idx is not None:
+                        break
+                if window_idx is None:
+                    continue
+                # Compute protrusion
+                protrusion = windows[window_idx][0] - dist
                 if debug:
-                    print(f"[DEBUG] detect_objects: Fallback to single window {idx}, convexity={convexity}, "
-                          f"median_dist={median_dist}, score={score}, points={len(object_points)}, "
-                          f"points_list={object_points}")
+                    print(f"[DEBUG] detect_objects: Point at ({x:.1f}, {y:.1f}), dist={dist:.1f}, window={window_idx}, window_dist={windows[window_idx][0]:.1f}, protrusion={protrusion:.1f}")
+                if protrusion > 30.0 and 120.0 <= dist <= 1200.0:  # Valid protrusion
+                    if protrusion > max_protrusion:
+                        max_protrusion = protrusion
+                        best_point = (x, y)
+            if best_point:
+                object_points = [(best_point[0], best_point[1])]
+                if debug:
+                    print(f"[DEBUG] detect_objects: Selected fallback point at ({best_point[0]:.1f}, {best_point[1]:.1f}), protrusion={max_protrusion:.1f}")
+            elif debug:
+                print("[DEBUG] detect_objects: No valid fallback point found")
+        
+        if best_region:
+            object_points = best_region[2]
+            if debug:
+                print(f"[DEBUG] detect_objects: Selected object region from window {best_region[0]} to {best_region[1]-1}, points={len(object_points)}, avg_dist={best_region[3]:.1f}")
+        elif not object_points and debug:
+            print("[DEBUG] detect_objects: No valid object region or point found")
         
         print(f"[DEBUG] detect_objects: Found {len(closest_wall_points)} closest wall points, "
               f"{len(open_space_points)} open space points, {len(object_points)} object points")
