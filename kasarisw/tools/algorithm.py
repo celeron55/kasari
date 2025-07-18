@@ -287,7 +287,7 @@ class ObjectDetector:
                 #       the first few points. Implement wrapping for the indices
                 #       to support this
                 window_indices = []
-                for i in range(0, 5):
+                for i in range(0, 3):
                     if window_idx > i:
                         window_indices.append(window_idx - 1 - i)
                     if window_idx < len(windows) - 1 - i:
