@@ -55,8 +55,8 @@ class ObjectDetector:
         fade_time_us (float): Time window for keeping points (microseconds).
         """
         self.points = [pt for pt in self.points if current_ts - pt[2] <= fade_time_us]
-        if len(self.points) > 1000:
-            self.points = self.points[-1000:]
+        if len(self.points) > 200:
+            self.points = self.points[-200:]
         if len(self.points) > 0:  # Only print if points exist
             print(f"[DEBUG] prune_points: Kept {len(self.points)} points after pruning")
 
