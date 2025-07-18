@@ -238,17 +238,17 @@ class ObjectDetector:
                     avg_middle_dist = sum(middle_dists) / len(middle_dists)
                     start_dist = windows[idx1][0]
                     end_dist = windows[idx2][0]
-                    if avg_middle_dist < min(start_dist, end_dist) - 80.0:  # Middle must be significantly closer
+                    if avg_middle_dist < min(start_dist, end_dist) - 100.0:  # Increased depth threshold
                         depth = min(start_dist, end_dist) - avg_middle_dist
                         region_points = []
                         for k in range(idx1 + 1, idx2):
                             region_points.extend(windows[k][1])
                         if len(region_points) < 2:
                             continue
-                        score = depth * len(region_points)  # Paired change score
+                        score = depth * min(len(region_points), 3)  # Cap points to reduce bias
                         if debug:
                             print(f"[DEBUG] detect_objects: Paired region {idx1+1} to {idx2-1}, points={len(region_points)}, avg_dist={avg_middle_dist:.1f}, depth={depth:.1f}, score={score:.4f}")
-                        if depth > 80.0 and 120.0 <= avg_middle_dist <= 1200.0:
+                        if depth > 100.0 and 120.0 <= avg_middle_dist <= 1200.0:
                             if score > best_score:
                                 best_score = score
                                 best_region = (idx1 + 1, idx2, region_points, avg_middle_dist)
@@ -257,13 +257,12 @@ class ObjectDetector:
         for dist_diff, idx in distance_changes:
             if dist_diff < 80.0:  # Skip small changes
                 continue
-            # Check both farther-to-closer and closer-to-farther transitions
             if idx + 1 < len(windows):
                 if windows[idx + 1][0] < windows[idx][0] - 80.0:  # Farther to closer
                     avg_middle_dist = windows[idx + 1][0]
                     region_points = windows[idx + 1][1]
                     depth = windows[idx][0] - avg_middle_dist
-                    score = depth * len(region_points) * 0.5  # Lower score for single changes
+                    score = depth * min(len(region_points), 3)  # No penalty for single changes
                     if debug:
                         print(f"[DEBUG] detect_objects: Single region at window {idx+1}, points={len(region_points)}, avg_dist={avg_middle_dist:.1f}, depth={depth:.1f}, score={score:.4f}")
                     if depth > 80.0 and 120.0 <= avg_middle_dist <= 1200.0 and len(region_points) >= 1:
@@ -274,7 +273,7 @@ class ObjectDetector:
                     avg_middle_dist = windows[idx][0]
                     region_points = windows[idx][1]
                     depth = windows[idx + 1][0] - avg_middle_dist
-                    score = depth * len(region_points) * 0.5  # Lower score for single changes
+                    score = depth * min(len(region_points), 3)  # No penalty for single changes
                     if debug:
                         print(f"[DEBUG] detect_objects: Single region at window {idx}, points={len(region_points)}, avg_dist={avg_middle_dist:.1f}, depth={depth:.1f}, score={score:.4f}")
                     if depth > 80.0 and 120.0 <= avg_middle_dist <= 1200.0 and len(region_points) >= 1:
@@ -295,8 +294,8 @@ class ObjectDetector:
                         if abs(wp[0] - x) < 1e-6 and abs(wp[1] - y) < 1e-6:
                             window_idx = i
                             break
-                    if window_idx is not None:
-                        break
+                    if window_idx is None:
+                        continue
                 if window_idx is None:
                     continue
                 window_indices = []
