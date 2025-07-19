@@ -297,14 +297,11 @@ impl ObjectDetector {
         let mut best_fallback_idx = 0;
         if best_score == f32::NEG_INFINITY {
             for i in 0..n {
-                let dist = sqrtf(self.points[sorted_indices[i]].0.powi(2) + self.points[sorted_indices[i]].1.powi(2));
+                let p = self.points[sorted_indices[i]];
+                let dist = sqrtf(p.0 * p.0 + p.1 * p.1);
                 let mut neighbor_indices: ArrayVec<usize, 6> = ArrayVec::new(); // Up to 3 left + 3 right
                 for offset in 1..=3 {
-                    if i >= offset {
-                        neighbor_indices.push((i - offset) % n);
-                    } else {
-                        neighbor_indices.push((n + i - offset) % n);
-                    }
+                    neighbor_indices.push((n + i - offset) % n);
                     neighbor_indices.push((i + offset) % n);
                 }
                 if neighbor_indices.len() < 2 {
@@ -359,12 +356,13 @@ impl ObjectDetector {
                 num_points = wall_window_size;
             } else {
                 start_pos = (best_idx1 + 1) % n;
-                num_points = wall_window_size + (best_idx2 - best_idx1 - 2);
+                num_points = (best_idx2 - best_idx1 + wall_window_size - 2) as usize;
             }
             let mut sum_x = 0.0;
             let mut sum_y = 0.0;
             for k in 0..num_points {
-                let idx = sorted_indices[(start_pos + k) % n];
+                let pos = (start_pos + k) % n;
+                let idx = sorted_indices[pos];
                 sum_x += self.points[idx].0;
                 sum_y += self.points[idx].1;
             }
