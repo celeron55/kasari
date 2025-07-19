@@ -1,3 +1,4 @@
+// kasarisw/src/shared/mod.rs
 #![cfg_attr(target_os = "none", no_std)]
 use core::cell::RefCell;
 use critical_section::Mutex;
