@@ -145,29 +145,45 @@ pub mod kasari {
                     self.acceleration_z = a_z;
                 }
                 InputEvent::Receiver(timestamp, _ch, pulse_length) => {
+                    // Mode 0 = RC Receiver control mode
                     if self.control_mode != 0 {
                         return;
                     }
-                    self.autonomous_enabled = false;
                     if !self.vbat_ok {
+                        self.autonomous_enabled = false;
                         self.motor_control_plan = None;
                         return;
                     }
                     match pulse_length {
                         Some(pulse_length) => {
-                            let target_speed_percent = (pulse_length - 1500.0) * 0.2;
+                            let stick_percent = (pulse_length - 1500.0) * 0.2;
                             if LOG_RECEIVER {
                                 println!(
-                                    "pulse_length -> target_speed_percent: {:?} -> {:?}",
-                                    pulse_length, target_speed_percent
+                                    "pulse_length -> stick_percent: {:?} -> {:?}",
+                                    pulse_length, stick_percent
                                 );
                             }
-                            self.motor_control_plan = Some(MotorControlPlan {
-                                timestamp: timestamp,
-                                rotation_speed: target_speed_percent,
-                                movement_x: 0.0,
-                                movement_y: 0.0,
-                            });
+                            if stick_percent >= 30.0 {
+                                self.autonomous_enabled = true;
+                            } else {
+                                self.autonomous_enabled = false;
+                                // We want a zeroed out motor control plan
+                                // instead of None because the ESCs won't
+                                // initialize unless we give them a moment of
+                                // zeroed out throttle input first.
+                                // Unfortunately this will brake hard when
+                                // autonomous mode is turned off afterwards,
+                                // which could be fixed by adding a variable
+                                // which tracks whether autonomous mode was
+                                // turned on previously and if it was, then this
+                                // would be set to None to avoid braking hard.
+                                self.motor_control_plan = Some(MotorControlPlan {
+                                    timestamp: timestamp,
+                                    rotation_speed: 0.0,
+                                    movement_x: 0.0,
+                                    movement_y: 0.0,
+                                });
+                            }
                         }
                         None => {
                             self.motor_control_plan = None;
@@ -223,7 +239,7 @@ pub mod kasari {
                 return;
             }
             let ramp_time = (ts - self.autonomous_start_ts.unwrap()) as f32 / 1_000_000.0;
-            let rotation_speed = 20.0 * (ramp_time / 2.0).min(1.0);
+            let rotation_speed = 1000.0 * (ramp_time / 2.0).min(1.0);
 
             let mut movement_x = 0.0;
             let mut movement_y = 0.0;

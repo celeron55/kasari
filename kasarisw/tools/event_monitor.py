@@ -130,7 +130,7 @@ class SensorGUI:
         
         # Sliders for r, m, t
         ttk.Label(self.frame, text="Rotation:").grid(row=14, column=0, sticky=tk.W)
-        self.r_scale = ttk.Scale(self.frame, from_=-100.0, to=100.0, orient='horizontal', variable=self.r_var)
+        self.r_scale = ttk.Scale(self.frame, from_=-2000.0, to=2000.0, orient='horizontal', variable=self.r_var)
         self.r_scale.grid(row=14, column=1, columnspan=2, sticky=tk.EW)
         
         ttk.Label(self.frame, text="Movement:").grid(row=15, column=0, sticky=tk.W)

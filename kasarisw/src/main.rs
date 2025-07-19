@@ -54,6 +54,8 @@ const PASSWORD: &str = env!("PASSWORD");
 
 const PWM_HZ: f32 = 400.0;
 
+const RPM_PER_THROTTLE_PERCENT: f32 = 30.0;
+
 // When you are okay with using a nightly compiler it's better to use https://docs.rs/static_cell/2.1.0/static_cell/macro.make_static.html
 macro_rules! mk_static {
     ($t:ty,$val:expr) => {{
@@ -346,8 +348,9 @@ async fn main(spawner: Spawner) {
         if let Some(ref plan) = logic.motor_control_plan {
             let timestamp = embassy_time::Instant::now().as_ticks();
             if timestamp - plan.timestamp < 500_000 {
-                let target_speed_percent = plan.rotation_speed;
-                let duty = target_speed_to_pwm_duty(target_speed_percent, 2u32.pow(8));
+                let target_speed_rpm = plan.rotation_speed;
+                let throttle_percent = target_speed_rpm / RPM_PER_THROTTLE_PERCENT;
+                let duty = target_speed_to_pwm_duty(throttle_percent, 2u32.pow(8));
                 if shared::LOG_MOTOR_CONTROL {
                     esp_println::println!("Setting motor duty cycle: {:?}", duty);
                 }
