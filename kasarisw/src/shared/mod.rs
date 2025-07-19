@@ -58,17 +58,17 @@ pub mod kasari {
 	use crate::shared::ObjectDetector;
     use crate::shared::CriticalSectionRawMutex;
 
-	#[derive(Clone)]
+	#[derive(Clone, Debug)]
     pub enum InputEvent {
         Lidar(u64, f32, f32, f32, f32), // timestamp, distance samples (mm)
         Accelerometer(u64, f32, f32),        // timestamp, acceleration Y (G), acceleration Z (G)
         Receiver(u64, u8, Option<f32>), // timestamp, channel (0=throttle), pulse length (us)
         Vbat(u64, f32),                 // timestamp, battery voltage (V)
         WifiControl(u64, u8, f32, f32, f32),// timestamp, mode, rotation speed, movement speed, turning speed
-        Planner(u64, MotorControlPlan, (f32, f32), (f32, f32), (f32, f32), f32), // timestamp, MCP, latest_closest_wall, latest_open_space, latest_object_pos
+        Planner(u64, MotorControlPlan, (f32, f32), (f32, f32), (f32, f32), f32, f32), // timestamp, MCP, latest_closest_wall, latest_open_space, latest_object_pos, measured_rpm
     }
 
-    #[derive(Clone, Copy)]
+    #[derive(Clone, Copy, Debug)]
     pub struct MotorControlPlan {
 		pub timestamp: u64,
         pub rotation_speed: f32,
@@ -221,6 +221,7 @@ pub mod kasari {
                             open_space,
                             object_pos,
                             self.detector.theta,
+                            self.detector.rpm,
                         )
                     );
                 }
@@ -279,7 +280,7 @@ pub mod kasari {
 				buf.extend_from_slice(&m.to_le_bytes());
 				buf.extend_from_slice(&t.to_le_bytes());
 			}
-            InputEvent::Planner(ts, plan, cw, os, op, theta) => {
+            InputEvent::Planner(ts, plan, cw, os, op, theta, rpm) => {
 				let tag = (5u16 ^ TAG_XOR).to_le_bytes();
 				buf.extend_from_slice(&tag);
 				buf.extend_from_slice(&ts.to_le_bytes());
@@ -293,6 +294,7 @@ pub mod kasari {
 				buf.extend_from_slice(&op.0.to_le_bytes());
 				buf.extend_from_slice(&op.1.to_le_bytes());
                 buf.extend_from_slice(&theta.to_le_bytes());
+                buf.extend_from_slice(&rpm.to_le_bytes());
 			}
 		}
 		buf

@@ -130,7 +130,7 @@ fn parse_event(line: &str) -> Result<InputEvent, Box<dyn Error>> {
             Ok(InputEvent::WifiControl(ts, mode, r, m, t))
         }
         "Planner" => {
-            if v.len() != 12 {
+            if v.len() != 12 && v.len() != 13 {
                 return Err("Invalid Planner event length".into());
             }
             let rotation_speed = v[2].as_f64().ok_or("Invalid rotation_speed")? as f32;
@@ -143,6 +143,11 @@ fn parse_event(line: &str) -> Result<InputEvent, Box<dyn Error>> {
             let op_x = v[9].as_f64().ok_or("Invalid op_x")? as f32;
             let op_y = v[10].as_f64().ok_or("Invalid op_y")? as f32;
             let theta = v[11].as_f64().ok_or("Invalid theta")? as f32;
+            let rpm = if v.len() >= 13 {
+                v[12].as_f64().ok_or("Invalid rpm")? as f32
+            } else {
+                0.0
+            };
             Ok(InputEvent::Planner(
                 ts,
                 MotorControlPlan {
@@ -155,6 +160,7 @@ fn parse_event(line: &str) -> Result<InputEvent, Box<dyn Error>> {
                 (os_x, os_y),
                 (op_x, op_y),
                 theta,
+                rpm,
             ))
         }
         _ => Err("Unknown event type".into()),
@@ -183,7 +189,7 @@ struct MyApp {
     last_real: Instant,
     current_lidar_points: Vec<(f32, f32)>,
     debug: bool,
-    latest_planner: Option<(MotorControlPlan, (f32, f32), (f32, f32), (f32, f32), f32)>,
+    latest_planner: Option<(u64, MotorControlPlan, (f32, f32), (f32, f32), (f32, f32), f32, f32)>,
     show_planner_theta: bool,
     theta_offset: f32,
 }
@@ -262,12 +268,12 @@ impl eframe::App for MyApp {
                         _ => {},
                         }
                     }
-                    if let InputEvent::Planner(ts, plan, cw, os, op, theta) = &event {
+                    if let InputEvent::Planner(ts, plan, cw, os, op, theta, rpm) = &event {
                         self.theta_offset = self.logic.detector.theta - *theta;
-                        self.latest_planner = Some((*plan, *cw, *os, *op, *theta));
+                        self.latest_planner = Some((*ts, *plan, *cw, *os, *op, *theta, *rpm));
                         self.show_planner_theta = true;
                         if self.debug {
-                            println!("Processed Planner ts={} theta={:.4} rpm={:.2} (sim_theta_at_this_moment={:.4})", plan.timestamp, *theta, self.logic.detector.rpm, self.logic.detector.theta);
+                            println!("Processed Planner ts={} plan={:?} theta={:.4} (sim: {:.4}) rpm={:.2} (sim: {:.4})", ts, plan, *theta, self.logic.detector.theta, rpm, self.logic.detector.rpm);
                         }
                     }
                     if matches!(&event, InputEvent::Lidar(..)) {
@@ -297,12 +303,12 @@ impl eframe::App for MyApp {
                     _ => {},
                     }
                 }
-                if let InputEvent::Planner(ts, plan, cw, os, op, theta) = &event {
+                if let InputEvent::Planner(ts, plan, cw, os, op, theta, rpm) = &event {
                     self.theta_offset = self.logic.detector.theta - *theta;
-                    self.latest_planner = Some((*plan, *cw, *os, *op, *theta));
+                    self.latest_planner = Some((*ts, *plan, *cw, *os, *op, *theta, *rpm));
                     self.show_planner_theta = true;
                     if self.debug {
-                        println!("Processed Planner ts={} theta={:.4} rpm={:.2} (sim_theta_at_this_moment={:.4})", plan.timestamp, *theta, self.logic.detector.rpm, self.logic.detector.theta);
+                        println!("Processed Planner ts={} plan={:?} theta={:.4} (sim: {:.4}) rpm={:.2} (sim: {:.4})", ts, plan, *theta, self.logic.detector.theta, rpm, self.logic.detector.rpm);
                     }
                 }
                 if matches!(&event, InputEvent::Lidar(..)) {
@@ -324,14 +330,16 @@ impl eframe::App for MyApp {
                 object_pos.0, object_pos.1);
         }
 
-        let target_rpm = self.latest_planner.as_ref().map_or(0.0, |p| p.0.rotation_speed);
+        let target_rpm = self.latest_planner.as_ref().map_or(0.0, |p| p.1.rotation_speed);
+        let measured_rpm = self.latest_planner.as_ref().map_or(0.0, |p| p.6);
 
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading(format!(
-                "Real-Time Robot LiDAR Simulation\nEvents: {}, TS: {} ms, RPM: {:.2}, Target RPM: {:.2}",
+                "Real-Time Robot LiDAR Simulation\nEvents: {}, TS: {} ms, Simulator RPM: {:.2}, Measured RPM: {:.2}, Target RPM: {:.2}",
                 self.current_event_idx,
                 self.logic.detector.last_ts.unwrap_or(0) / 1000,
                 self.logic.detector.rpm,
+                measured_rpm,
                 target_rpm
             ));
 
@@ -417,7 +425,7 @@ impl eframe::App for MyApp {
                     );
                 }
 
-                if let Some((plan, cw, os, op, theta)) = &self.latest_planner {
+                if let Some((ts, plan, cw, os, op, theta, rpm)) = &self.latest_planner {
                     let offset = self.theta_offset;
 
                     // Rotate and draw movement vector as yellow line

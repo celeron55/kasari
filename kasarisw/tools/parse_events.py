@@ -50,11 +50,11 @@ def parse_event(buffer):
         timestamp, mode, r, m, t = struct.unpack('<QBfff', buffer[2:23])
         return ('WifiControl', timestamp, mode, r, m, t), buffer[23:]
 
-    elif tag == 5:  # Planner: 2 + 8 + 12 (3*f32 for plan) + 24 (6*f32 for vectors) + 4 (theta) = 50 bytes
-        if len(buffer) < 50:
+    elif tag == 5:  # Planner: 2 + 8 + 12 (3*f32 for plan) + 24 (6*f32 for vectors) + 4 (theta) + 4 (rpm) = 54 bytes
+        if len(buffer) < 54:
             return None, buffer
-        timestamp, rotation_speed, movement_x, movement_y, cw_x, cw_y, os_x, os_y, op_x, op_y, theta = struct.unpack('<Qffffffffff', buffer[2:50])
-        return ('Planner', timestamp, rotation_speed, movement_x, movement_y, cw_x, cw_y, os_x, os_y, op_x, op_y, theta), buffer[50:]
+        timestamp, rotation_speed, movement_x, movement_y, cw_x, cw_y, os_x, os_y, op_x, op_y, theta, rpm = struct.unpack('<Qfffffffffff', buffer[2:54])
+        return ('Planner', timestamp, rotation_speed, movement_x, movement_y, cw_x, cw_y, os_x, os_y, op_x, op_y, theta, rpm), buffer[54:]
     
     else:
         # Invalid tag: skip 1 byte to slide/resync
