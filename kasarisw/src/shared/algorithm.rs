@@ -17,7 +17,7 @@ const CALIBRATION_MAX_G: f32 = 8.0;
 pub struct ObjectDetector {
     pub theta: f32,
     pub rpm: f32,
-    pub last_ts: Option<u64>,
+    pub last_ts: Option<u64>, // Last Lidar event timestamp
     pub bins_dist: [f32; NUM_BINS], // dist per bin, INF if invalid
     pub last_xys: ArrayVec<(f32, f32), MAX_POINTS_PER_UPDATE>,
     accel_offset: f32,
@@ -57,27 +57,10 @@ impl ObjectDetector {
     pub fn update(&mut self, event: &super::kasari::InputEvent) {
         use super::kasari::InputEvent::*;
 
-        let ts = match event {
-            Accelerometer(ts, _, _) | Lidar(ts, _, _, _, _) => *ts,
-            _ => return,
-        };
-
-        if self.last_ts.is_none() {
-            self.last_ts = Some(ts);
-            return;
-        }
-
-        let last_ts = self.last_ts.unwrap();
-        if ts < last_ts {
-            return;
-        }
-        let dt = (ts - last_ts) as f32 / 1_000_000.0;
-
-        self.theta += (self.rpm / 60.0) * 2.0 * PI * dt;
-        self.theta = rem_euclid_f32(self.theta, 2.0 * PI);
-
-        self.last_ts = Some(ts);
-
+        // Handle accelerometer events without caring about the timestamp
+        // This is important, because these events arrive out of sync with each
+        // other and we only care about synchronizing to the lidar in order to
+        // maintain angle accuracy, as angles are derived from timestamps.
         match event {
             Accelerometer(_, ay, _) => {
                 let raw_accel_y = *ay;
@@ -98,7 +81,33 @@ impl ObjectDetector {
                 if self.calibration_done {
                     self.rpm = self.accel_to_rpm(accel_y);
                 }
+                return;
             }
+            _ => {}
+        };
+
+        let ts = match event {
+            Lidar(ts, _, _, _, _) => *ts,
+            _ => return,
+        };
+
+        if self.last_ts.is_none() {
+            self.last_ts = Some(ts);
+            return;
+        }
+
+        let last_ts = self.last_ts.unwrap();
+        if ts < last_ts {
+            return;
+        }
+        let dt = (ts - last_ts) as f32 / 1_000_000.0;
+
+        self.theta += (self.rpm / 60.0) * 2.0 * PI * dt;
+        self.theta = rem_euclid_f32(self.theta, 2.0 * PI);
+
+        self.last_ts = Some(ts);
+
+        match event {
             Lidar(_, d1, d2, d3, d4) => {
                 let distances = [*d1, *d2, *d3, *d4];
                 let delta_theta = if self.rpm != 0.0 {
