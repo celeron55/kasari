@@ -1,10 +1,15 @@
-#![no_std]
+#![cfg_attr(target_os = "none", no_std)]
 use core::cell::RefCell;
 use critical_section::Mutex;
 use ringbuffer::ConstGenericRingBuffer;
 use embassy_sync::pubsub::PubSubChannel;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use static_cell::StaticCell;
+
+#[cfg(target_os = "none")]
+use embassy_time::Instant;
+#[cfg(not(target_os = "none"))]
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const LOG_LIDAR: bool = false;
 pub const LOG_ALL_LIDAR: bool = false;
@@ -14,10 +19,25 @@ pub const LOG_VBAT: bool = false;
 pub type EventChannel = PubSubChannel<CriticalSectionRawMutex, kasari::InputEvent, 64, 2, 6>;
 pub static EVENT_CHANNEL: StaticCell<EventChannel> = StaticCell::new();
 
+pub fn get_current_timestamp() -> u64 {
+    #[cfg(target_os = "none")]
+    {
+        Instant::now().as_ticks()
+    }
+    #[cfg(not(target_os = "none"))]
+    {
+        SystemTime::now().duration_since(UNIX_EPOCH).expect("Time went backwards").as_micros() as u64
+    }
+}
+
 pub mod kasari {
-    use crate::shared::LOG_RECEIVER;
-    use esp_println::println;
+    use crate::shared::{LOG_RECEIVER, get_current_timestamp};
+    #[cfg(target_os = "none")]
 	use alloc::vec::Vec;
+    #[cfg(not(target_os = "none"))]
+    use std::vec::Vec;
+    #[cfg(target_os = "none")]
+    use esp_println::println;
 
 	#[derive(Clone)]
     pub enum InputEvent {
@@ -108,7 +128,7 @@ pub mod kasari {
                     }
                 }
 				InputEvent::WifiControl(_timestamp, mode, r, m, t) => {
-					println!("WifiControl({}, {}, {}, {})", mode, r, m, t);
+                    println!("WifiControl({}, {}, {}, {})", mode, r, m, t);
 					self.control_mode = mode;
 					self.control_rotation_speed = r;
 					self.control_movement_speed = m;
@@ -121,7 +141,7 @@ pub mod kasari {
                         return;
                     }
                     if self.control_mode == 1 {
-						let timestamp = embassy_time::Instant::now().as_ticks();
+						let timestamp = get_current_timestamp();
 						self.motor_control_plan = Some(MotorControlPlan {
 							timestamp: timestamp,
 							throttle: self.control_rotation_speed,

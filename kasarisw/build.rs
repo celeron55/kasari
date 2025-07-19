@@ -1,7 +1,9 @@
 fn main() {
-    linker_be_nice();
-    // make sure linkall.x is the last linker script (otherwise might cause problems with flip-link)
-    println!("cargo:rustc-link-arg=-Tlinkall.x");
+    if std::env::var("TARGET").unwrap_or_default() == "xtensa-esp32-none-elf" {
+        linker_be_nice();
+        // make sure linkall.x is the last linker script (otherwise might cause problems with flip-link)
+        println!("cargo:rustc-link-arg=-Tlinkall.x");
+    }
 }
 
 fn linker_be_nice() {
