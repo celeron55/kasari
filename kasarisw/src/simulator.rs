@@ -184,6 +184,7 @@ struct MyApp {
     debug: bool,
     latest_planner: Option<(MotorControlPlan, (f32, f32), (f32, f32), (f32, f32), f32)>,
     show_planner_theta: bool,
+    theta_offset: f32,
 }
 
 impl MyApp {
@@ -202,6 +203,7 @@ impl MyApp {
             debug,
             latest_planner: None,
             show_planner_theta: false,
+            theta_offset: 0.0,
         }
     }
 
@@ -214,6 +216,15 @@ impl MyApp {
         self.current_lidar_points.clear();
         self.latest_planner = None;
         self.show_planner_theta = false;
+        self.theta_offset = 0.0;
+    }
+
+    fn rotate_point(&self, x: f32, y: f32, angle: f32) -> (f64, f64) {
+        let cos_a = angle.cos();
+        let sin_a = angle.sin();
+        let new_x = x * cos_a - y * sin_a;
+        let new_y = x * sin_a + y * cos_a;
+        (new_x as f64, new_y as f64)
     }
 }
 
@@ -241,11 +252,12 @@ impl eframe::App for MyApp {
                 while self.current_event_idx < self.events.len() && !found_lidar {
                     let event = self.events[self.current_event_idx].clone();
                     self.logic.feed_event(event.clone());
-                    if let InputEvent::Planner(plan, cw, os, op, theta) = event {
-                        self.latest_planner = Some((plan, cw, os, op, theta));
+                    if let InputEvent::Planner(plan, cw, os, op, theta) = &event {
+                        self.theta_offset = self.logic.detector.theta - *theta;
+                        self.latest_planner = Some((*plan, *cw, *os, *op, *theta));
                         self.show_planner_theta = true;
                     }
-                    if matches!(event, InputEvent::Lidar(..)) {
+                    if matches!(&event, InputEvent::Lidar(..)) {
                         found_lidar = true;
                         self.current_lidar_points = self.logic.detector.last_xys.to_vec();
                     }
@@ -264,11 +276,12 @@ impl eframe::App for MyApp {
             {
                 let event = self.events[self.current_event_idx].clone();
                 self.logic.feed_event(event.clone());
-                if let InputEvent::Planner(plan, cw, os, op, theta) = event {
-                    self.latest_planner = Some((plan, cw, os, op, theta));
+                if let InputEvent::Planner(plan, cw, os, op, theta) = &event {
+                    self.theta_offset = self.logic.detector.theta - *theta;
+                    self.latest_planner = Some((*plan, *cw, *os, *op, *theta));
                     self.show_planner_theta = true;
                 }
-                if matches!(event, InputEvent::Lidar(..)) {
+                if matches!(&event, InputEvent::Lidar(..)) {
                     self.current_lidar_points = self.logic.detector.last_xys.to_vec();
                 }
                 self.current_event_idx += 1;
@@ -371,44 +384,51 @@ impl eframe::App for MyApp {
                 }
 
                 if let Some((plan, cw, os, op, theta)) = &self.latest_planner {
-                    // Draw movement vector as yellow line
+                    let offset = self.theta_offset;
+
+                    // Rotate and draw movement vector as yellow line
+                    let (rot_mv_x, rot_mv_y) = self.rotate_point(plan.movement_x, plan.movement_y, offset);
                     plot_ui.line(
                         Line::new(PlotPoints::new(vec![
                             [0.0, 0.0],
-                            [plan.movement_x as f64, plan.movement_y as f64],
+                            [rot_mv_x, rot_mv_y],
                         ]))
                         .color(egui::Color32::YELLOW)
                         .width(2.0),
                     );
 
-                    // Draw detection vectors as large dots
+                    // Draw detection vectors as large dots after rotation
                     let dot_radius = 10.0;
                     if cw.0 != 0.0 || cw.1 != 0.0 {
+                        let (rot_x, rot_y) = self.rotate_point(cw.0, cw.1, offset);
                         plot_ui.points(
-                            egui_plot::Points::new(vec![[cw.0 as f64, cw.1 as f64]])
+                            egui_plot::Points::new(vec![[rot_x, rot_y]])
                                 .color(egui::Color32::GREEN)
                                 .radius(dot_radius),
                         );
                     }
                     if os.0 != 0.0 || os.1 != 0.0 {
+                        let (rot_x, rot_y) = self.rotate_point(os.0, os.1, offset);
                         plot_ui.points(
-                            egui_plot::Points::new(vec![[os.0 as f64, os.1 as f64]])
+                            egui_plot::Points::new(vec![[rot_x, rot_y]])
                                 .color(egui::Color32::BLUE)
                                 .radius(dot_radius),
                         );
                     }
                     if op.0 != 100.0 || op.1 != 100.0 {
+                        let (rot_x, rot_y) = self.rotate_point(op.0, op.1, offset);
                         plot_ui.points(
-                            egui_plot::Points::new(vec![[op.0 as f64, op.1 as f64]])
+                            egui_plot::Points::new(vec![[rot_x, rot_y]])
                                 .color(egui::Color32::from_rgb(128, 0, 128))
                                 .radius(dot_radius),
                         );
                     }
 
-                    // Draw theta as yellow dot if show_planner_theta
+                    // Draw theta as yellow dot if show_planner_theta, rotated
                     if self.show_planner_theta {
-                        let theta_x = 200.0 * theta.cos() as f64;
-                        let theta_y = 200.0 * theta.sin() as f64;
+                        let adjusted_theta = *theta + offset;
+                        let theta_x = 200.0 * adjusted_theta.cos() as f64;
+                        let theta_y = 200.0 * adjusted_theta.sin() as f64;
                         plot_ui.points(
                             egui_plot::Points::new(vec![[theta_x, theta_y]])
                                 .color(egui::Color32::YELLOW)
