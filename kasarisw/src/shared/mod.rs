@@ -66,7 +66,7 @@ pub mod kasari {
         Planner(MotorControlPlan, (f32, f32), (f32, f32), (f32, f32), f32),
     }
 
-    #[derive(Clone)]
+    #[derive(Clone, Copy)]
     pub struct MotorControlPlan {
 		pub timestamp: u64,
         pub rotation_speed: f32,

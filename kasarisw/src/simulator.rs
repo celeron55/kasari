@@ -10,7 +10,7 @@ use egui_plot::{Line, Plot, PlotBounds, PlotPoint, PlotPoints};
 use serde_json::Value;
 
 mod shared;
-use shared::kasari::{InputEvent, MainLogic};
+use shared::kasari::{InputEvent, MainLogic, MotorControlPlan};
 use shared::algorithm::{NUM_BINS, BIN_ANGLE_STEP};
 
 #[derive(Parser, Debug)]
@@ -144,7 +144,7 @@ fn parse_event(line: &str) -> Result<InputEvent, Box<dyn Error>> {
             let op_y = v[10].as_f64().ok_or("Invalid op_y")? as f32;
             let theta = v[11].as_f64().ok_or("Invalid theta")? as f32;
             Ok(InputEvent::Planner(
-                shared::kasari::MotorControlPlan {
+                MotorControlPlan {
                     timestamp: ts,
                     rotation_speed,
                     movement_x,
@@ -182,6 +182,8 @@ struct MyApp {
     last_real: Instant,
     current_lidar_points: Vec<(f32, f32)>,
     debug: bool,
+    latest_planner: Option<(MotorControlPlan, (f32, f32), (f32, f32), (f32, f32), f32)>,
+    show_planner_theta: bool,
 }
 
 impl MyApp {
@@ -198,6 +200,8 @@ impl MyApp {
             last_real: Instant::now(),
             current_lidar_points: Vec::new(),
             debug,
+            latest_planner: None,
+            show_planner_theta: false,
         }
     }
 
@@ -208,6 +212,8 @@ impl MyApp {
         self.mode = "play".to_string();
         self.step_requested = false;
         self.current_lidar_points.clear();
+        self.latest_planner = None;
+        self.show_planner_theta = false;
     }
 }
 
@@ -226,6 +232,8 @@ impl eframe::App for MyApp {
             speed = 0.0;
         }
 
+        self.show_planner_theta = false;
+
         if self.mode == "step" {
             if self.step_requested {
                 self.step_requested = false;
@@ -233,6 +241,10 @@ impl eframe::App for MyApp {
                 while self.current_event_idx < self.events.len() && !found_lidar {
                     let event = self.events[self.current_event_idx].clone();
                     self.logic.feed_event(event.clone());
+                    if let InputEvent::Planner(plan, cw, os, op, theta) = event {
+                        self.latest_planner = Some((plan, cw, os, op, theta));
+                        self.show_planner_theta = true;
+                    }
                     if matches!(event, InputEvent::Lidar(..)) {
                         found_lidar = true;
                         self.current_lidar_points = self.logic.detector.last_xys.to_vec();
@@ -252,6 +264,10 @@ impl eframe::App for MyApp {
             {
                 let event = self.events[self.current_event_idx].clone();
                 self.logic.feed_event(event.clone());
+                if let InputEvent::Planner(plan, cw, os, op, theta) = event {
+                    self.latest_planner = Some((plan, cw, os, op, theta));
+                    self.show_planner_theta = true;
+                }
                 if matches!(event, InputEvent::Lidar(..)) {
                     self.current_lidar_points = self.logic.detector.last_xys.to_vec();
                 }
@@ -261,12 +277,15 @@ impl eframe::App for MyApp {
 
         let (closest_wall, open_space, object_pos) = self.logic.detector.detect_objects(self.debug);
 
+        let target_rpm = self.latest_planner.as_ref().map_or(0.0, |p| p.0.rotation_speed);
+
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading(format!(
-                "Real-Time Robot LiDAR Simulation\nEvents: {}, TS: {} ms, RPM: {:.2}",
+                "Real-Time Robot LiDAR Simulation\nEvents: {}, TS: {} ms, RPM: {:.2}, Target RPM: {:.2}",
                 self.current_event_idx,
                 self.logic.detector.last_ts.unwrap_or(0) / 1000,
-                self.logic.detector.rpm
+                self.logic.detector.rpm,
+                target_rpm
             ));
 
             let plot = Plot::new("lidar_plot")
@@ -349,6 +368,53 @@ impl eframe::App for MyApp {
                         .color(egui::Color32::from_rgb(128, 0, 128))
                         .width(2.0),
                     );
+                }
+
+                if let Some((plan, cw, os, op, theta)) = &self.latest_planner {
+                    // Draw movement vector as yellow line
+                    plot_ui.line(
+                        Line::new(PlotPoints::new(vec![
+                            [0.0, 0.0],
+                            [plan.movement_x as f64, plan.movement_y as f64],
+                        ]))
+                        .color(egui::Color32::YELLOW)
+                        .width(2.0),
+                    );
+
+                    // Draw detection vectors as large dots
+                    let dot_radius = 10.0;
+                    if cw.0 != 0.0 || cw.1 != 0.0 {
+                        plot_ui.points(
+                            egui_plot::Points::new(vec![[cw.0 as f64, cw.1 as f64]])
+                                .color(egui::Color32::GREEN)
+                                .radius(dot_radius),
+                        );
+                    }
+                    if os.0 != 0.0 || os.1 != 0.0 {
+                        plot_ui.points(
+                            egui_plot::Points::new(vec![[os.0 as f64, os.1 as f64]])
+                                .color(egui::Color32::BLUE)
+                                .radius(dot_radius),
+                        );
+                    }
+                    if op.0 != 100.0 || op.1 != 100.0 {
+                        plot_ui.points(
+                            egui_plot::Points::new(vec![[op.0 as f64, op.1 as f64]])
+                                .color(egui::Color32::from_rgb(128, 0, 128))
+                                .radius(dot_radius),
+                        );
+                    }
+
+                    // Draw theta as yellow dot if show_planner_theta
+                    if self.show_planner_theta {
+                        let theta_x = 200.0 * theta.cos() as f64;
+                        let theta_y = 200.0 * theta.sin() as f64;
+                        plot_ui.points(
+                            egui_plot::Points::new(vec![[theta_x, theta_y]])
+                                .color(egui::Color32::YELLOW)
+                                .radius(8.0),
+                        );
+                    }
                 }
             });
         });
