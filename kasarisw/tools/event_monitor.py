@@ -251,10 +251,11 @@ class SensorGUI:
     def format_planner(self):
         if self.latest_data['Planner'] == "No data yet":
             return "No data yet"
-        ts, rotation_speed, movement_x, movement_y, cw_x, cw_y, os_x, os_y, op_x, op_y, theta = self.latest_data['Planner']
+        ts, rotation_speed, movement_x, movement_y, cw_x, cw_y, os_x, os_y, op_x, op_y, theta, rpm = self.latest_data['Planner']
         return (f"Timestamp: {ts}, Rotation: {rotation_speed:.2f}, Movement: ({movement_x:.2f}, {movement_y:.2f}), "
                 f"Closest Wall: ({cw_x:.2f}, {cw_y:.2f}), Open Space: ({os_x:.2f}, {os_y:.2f}), "
-                f"Object: ({op_x:.2f}, {op_y:.2f}), Theta: {theta:.2f}")
+                f"Object: ({op_x:.2f}, {op_y:.2f}), Theta: {theta:.2f}, "
+                f"RPM measurement: {rpm:.2f}")
 
     def toggle_control(self):
         self.control_active = not self.control_active
