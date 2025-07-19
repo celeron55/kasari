@@ -228,8 +228,11 @@ pub mod kasari {
                 let wall_x = self.latest_closest_wall.0;
                 let wall_y = self.latest_closest_wall.1;
                 let wall_dist = sqrtf(wall_x * wall_x + wall_y * wall_y);
+                let obj_x = self.latest_object_pos.0;
+                let obj_y = self.latest_object_pos.1;
+                let obj_dist = sqrtf(obj_x * obj_x + obj_y * obj_y);
 
-                if wall_dist > 0.0 && wall_dist < 200.0 {
+                if wall_dist > 0.0 && wall_dist < 200.0 && obj_dist > wall_dist {
                     let away_x = -wall_x;
                     let away_y = -wall_y;
                     let target_x = (away_x + self.latest_open_space.0) / 2.0;
@@ -240,8 +243,6 @@ pub mod kasari {
                         movement_y = target_y / target_len * 1.0;
                     }
                 } else {
-                    let obj_x = self.latest_object_pos.0;
-                    let obj_y = self.latest_object_pos.1;
                     if obj_x != 100.0 || obj_y != 100.0 {
                         let obj_dist = sqrtf(obj_x * obj_x + obj_y * obj_y);
                         if obj_dist > 0.0 {
