@@ -47,8 +47,9 @@ acceleration of a fixed point in the robot body.
 
 The sensor type is a triangulation LIDAR which are commonly used in robot vacuum
 cleaners, but it is ran in a non-standard way removed from its regular mount,
-maxing out the sampling rate by generating a "fake" encoder signal, with the
-only goal of getting as many samples from it as possible. There is no LIDAR
-motor. Instead, the entire robot spins. There is no TX line to the LIDAR, only
-RX. The LIDAR encodes 4 evenly spaced measurements per event.
+maxing out the sampling rate by generating a "fake" encoder signal which does
+not depend on the actual RPM of the robot, with the only goal of getting as
+many samples from it as possible. There is no LIDAR motor. Instead, the entire
+robot spins. There is no TX line to the LIDAR, only RX. The LIDAR encodes 4
+evenly spaced measurements per event.
 
