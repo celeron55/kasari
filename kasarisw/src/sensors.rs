@@ -1,4 +1,8 @@
 #![no_std]
+use crate::shared::{kasari::InputEvent, EventChannel, LOG_LIDAR};
+use crate::LIDAR_EVENT_QUEUE_REF;
+use crate::SIGNAL_LIDAR_REF;
+use alloc::collections::VecDeque;
 use core::cell::RefCell;
 use core::ops::DerefMut;
 use critical_section::Mutex;
@@ -6,9 +10,10 @@ use embassy_executor::Spawner;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::signal::Signal;
 use embassy_time::Timer;
+use esp_hal::rmt::RxChannelAsync;
 use esp_hal::{
     gpio::Level,
-    rmt::{PulseCode, Channel},
+    rmt::{Channel, PulseCode},
     spi::master::Spi,
     uart::{UartRx, UartTx},
     Async,
@@ -16,11 +21,6 @@ use esp_hal::{
 use esp_println::println;
 use ringbuffer::ConstGenericRingBuffer;
 use ringbuffer::RingBuffer;
-use crate::shared::{EventChannel, LOG_LIDAR, kasari::InputEvent};
-use esp_hal::rmt::RxChannelAsync;
-use alloc::collections::VecDeque;
-use crate::SIGNAL_LIDAR_REF;
-use crate::LIDAR_EVENT_QUEUE_REF;
 
 // LIDAR constants
 pub const PACKET_SIZE: usize = 22;
@@ -58,7 +58,9 @@ pub async fn lidar_writer(
 pub async fn lidar_publisher(event_channel: &'static EventChannel) {
     let publisher = event_channel.publisher().unwrap();
     loop {
-        unsafe { SIGNAL_LIDAR_REF.unwrap().wait().await; }
+        unsafe {
+            SIGNAL_LIDAR_REF.unwrap().wait().await;
+        }
         critical_section::with(|cs| {
             let mut queue = unsafe { LIDAR_EVENT_QUEUE_REF.unwrap().borrow(cs).borrow_mut() };
             while let Some(event) = queue.dequeue() {
@@ -113,8 +115,11 @@ pub fn compute_checksum(data: &[u8]) -> u16 {
 }
 
 #[embassy_executor::task]
-pub async fn accelerometer_task(mut spi: Spi<'static, esp_hal::Blocking>, event_channel: &'static EventChannel) {
-	let publisher = event_channel.publisher().unwrap();
+pub async fn accelerometer_task(
+    mut spi: Spi<'static, esp_hal::Blocking>,
+    event_channel: &'static EventChannel,
+) {
+    let publisher = event_channel.publisher().unwrap();
 
     let mut buf = [(0x00 << 1) | 1, 0]; // DEVID_AD
     spi.transfer(&mut buf).unwrap();
@@ -133,9 +138,9 @@ pub async fn accelerometer_task(mut spi: Spi<'static, esp_hal::Blocking>, event_
         let y_g = y_raw as f32 * 0.2;
         let z_g = z_raw as f32 * 0.2;
 
-		let timestamp = embassy_time::Instant::now().as_ticks();
-		let event = InputEvent::Accelerometer(timestamp, -y_g, -z_g);
-		publisher.publish_immediate(event);
+        let timestamp = embassy_time::Instant::now().as_ticks();
+        let event = InputEvent::Accelerometer(timestamp, -y_g, -z_g);
+        publisher.publish_immediate(event);
 
         Timer::after_millis(10).await;
     }
@@ -143,7 +148,7 @@ pub async fn accelerometer_task(mut spi: Spi<'static, esp_hal::Blocking>, event_
 
 #[embassy_executor::task]
 pub async fn rmt_task(mut ch0: Channel<Async, 0>, event_channel: &'static EventChannel) {
-	let publisher = event_channel.publisher().unwrap();
+    let publisher = event_channel.publisher().unwrap();
 
     let mut buffer0: [u32; 1] = [PulseCode::empty(); 1];
 
@@ -173,8 +178,8 @@ pub async fn rmt_task(mut ch0: Channel<Async, 0>, event_channel: &'static EventC
             Err(_err) => {}
         }
 
-		let timestamp = embassy_time::Instant::now().as_ticks();
-		let event = InputEvent::Receiver(timestamp, 0, ch0_final_result);
-		publisher.publish_immediate(event);
+        let timestamp = embassy_time::Instant::now().as_ticks();
+        let event = InputEvent::Receiver(timestamp, 0, ch0_final_result);
+        publisher.publish_immediate(event);
     }
 }

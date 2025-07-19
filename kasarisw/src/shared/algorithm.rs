@@ -1,11 +1,11 @@
 // algorithm.rs
 #![no_std]
 
+use crate::shared::rem_euclid_f32;
 use arrayvec::ArrayVec;
 use core::cmp::Ordering;
 use core::f32::consts::PI;
 use libm::{atan2f, cosf, fabsf, sinf, sqrtf};
-use crate::shared::rem_euclid_f32;
 
 pub const NUM_BINS: usize = 90; // 4° per bin
 pub const BIN_ANGLE_STEP: f32 = 2.0 * PI / NUM_BINS as f32;
@@ -90,7 +90,8 @@ impl ObjectDetector {
                         }
                     }
                     if self.calibration_samples.len() >= CALIBRATION_COUNT {
-                        self.accel_offset = self.calibration_samples.iter().sum::<f32>() / self.calibration_samples.len() as f32;
+                        self.accel_offset = self.calibration_samples.iter().sum::<f32>()
+                            / self.calibration_samples.len() as f32;
                         self.calibration_done = true;
                     }
                 }
@@ -111,13 +112,17 @@ impl ObjectDetector {
 
                 for (i, &d) in distances.iter().enumerate() {
                     if 50.0 < d && d < 1600.0 {
-                        let angle = rem_euclid_f32(self.theta - ((distances.len() as f32 - i as f32 - 1.0) * step_theta), 2.0 * PI);
+                        let angle = rem_euclid_f32(
+                            self.theta - ((distances.len() as f32 - i as f32 - 1.0) * step_theta),
+                            2.0 * PI,
+                        );
                         let x = d * cosf(angle);
                         let y = d * sinf(angle);
                         self.last_xys.push((x, y));
                         let bin_idx = ((angle / BIN_ANGLE_STEP) as usize) % NUM_BINS;
                         if self.bins_dist[bin_idx].is_finite() {
-                            self.bins_dist[bin_idx] = (self.bins_dist[bin_idx] + d) / 2.0; // Average if existing
+                            self.bins_dist[bin_idx] = (self.bins_dist[bin_idx] + d) / 2.0;
+                        // Average if existing
                         } else {
                             self.bins_dist[bin_idx] = d;
                         }
@@ -153,7 +158,11 @@ impl ObjectDetector {
                     count += 1.0;
                 }
             }
-            let avg = if count > 0.0 { sum / count } else { f32::INFINITY };
+            let avg = if count > 0.0 {
+                sum / count
+            } else {
+                f32::INFINITY
+            };
             avgs[i] = avg;
 
             if 120.0 <= avg && avg <= 1500.0 {
@@ -195,12 +204,18 @@ impl ObjectDetector {
             for j in (i + 1)..large_changes.len() {
                 let mut idx1 = large_changes[i].1;
                 let mut idx2 = large_changes[j].1;
-                let (min_idx, max_idx) = if idx1 < idx2 { (idx1, idx2) } else { (idx2, idx1) };
+                let (min_idx, max_idx) = if idx1 < idx2 {
+                    (idx1, idx2)
+                } else {
+                    (idx2, idx1)
+                };
                 let diff = max_idx - min_idx;
                 let wrap_diff = n - diff;
                 let is_wrap = wrap_diff < diff;
                 let effective_diff = if is_wrap { wrap_diff } else { diff };
-                if effective_diff < 4 || effective_diff > 30 { continue; }
+                if effective_diff < 4 || effective_diff > 30 {
+                    continue;
+                }
                 let middle_count = (effective_diff - 1) as f32;
                 let sum_middle = if !is_wrap {
                     prefix_avgs[max_idx] - prefix_avgs[min_idx + 1]
@@ -259,7 +274,9 @@ impl ObjectDetector {
         if best_score == f32::NEG_INFINITY {
             for i in 0..n {
                 let dist = self.bins_dist[i];
-                if !dist.is_finite() { continue; }
+                if !dist.is_finite() {
+                    continue;
+                }
                 let mut sum_neighbor = 0.0;
                 let mut neighbor_count = 0.0;
                 for offset in 1..=3 {
@@ -274,7 +291,9 @@ impl ObjectDetector {
                         neighbor_count += 1.0;
                     }
                 }
-                if neighbor_count < 2.0 { continue; }
+                if neighbor_count < 2.0 {
+                    continue;
+                }
                 let avg_neighbor = sum_neighbor / neighbor_count;
                 let protrusion = avg_neighbor - dist;
                 if protrusion > 50.0 && 120.0 <= dist && dist <= 1200.0 {
@@ -349,7 +368,11 @@ impl ObjectDetector {
                 num_points = wall_window_size;
             } else {
                 start_pos = (best_start + 1) % n;
-                let diff = if best_end > best_start { best_end - best_start } else { (best_end + n) - best_start };
+                let diff = if best_end > best_start {
+                    best_end - best_start
+                } else {
+                    (best_end + n) - best_start
+                };
                 num_points = (diff + wall_window_size - 2) as usize;
             }
             let mut sum_x = 0.0;
@@ -370,7 +393,10 @@ impl ObjectDetector {
         } else if max_protrusion != f32::NEG_INFINITY {
             let d = self.bins_dist[best_fallback_idx];
             if d.is_finite() {
-                object_pos = (d * unsafe { BIN_COS[best_fallback_idx] }, d * unsafe { BIN_SIN[best_fallback_idx] });
+                object_pos = (
+                    d * unsafe { BIN_COS[best_fallback_idx] },
+                    d * unsafe { BIN_SIN[best_fallback_idx] },
+                );
             }
         }
 

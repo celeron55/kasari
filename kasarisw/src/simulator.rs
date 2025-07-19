@@ -10,8 +10,8 @@ use egui_plot::{Line, Plot, PlotBounds, PlotPoint, PlotPoints};
 use serde_json::Value;
 
 mod shared;
+use shared::algorithm::{BIN_ANGLE_STEP, NUM_BINS};
 use shared::kasari::{InputEvent, MainLogic, MotorControlPlan};
-use shared::algorithm::{NUM_BINS, BIN_ANGLE_STEP};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -189,14 +189,26 @@ struct MyApp {
     last_real: Instant,
     current_lidar_points: Vec<(f32, f32)>,
     debug: bool,
-    latest_planner: Option<(u64, MotorControlPlan, (f32, f32), (f32, f32), (f32, f32), f32, f32)>,
+    latest_planner: Option<(
+        u64,
+        MotorControlPlan,
+        (f32, f32),
+        (f32, f32),
+        (f32, f32),
+        f32,
+        f32,
+    )>,
     show_planner_theta: bool,
     theta_offset: f32,
 }
 
 impl MyApp {
     fn new(events: Vec<InputEvent>, debug: bool) -> Self {
-        let first_ts = if events.is_empty() { 0 } else { get_ts(&events[0]) };
+        let first_ts = if events.is_empty() {
+            0
+        } else {
+            get_ts(&events[0])
+        };
         Self {
             logic: MainLogic::new(),
             events,
@@ -330,7 +342,10 @@ impl eframe::App for MyApp {
                 object_pos.0, object_pos.1);
         }
 
-        let target_rpm = self.latest_planner.as_ref().map_or(0.0, |p| p.1.rotation_speed);
+        let target_rpm = self
+            .latest_planner
+            .as_ref()
+            .map_or(0.0, |p| p.1.rotation_speed);
         let measured_rpm = self.latest_planner.as_ref().map_or(0.0, |p| p.6);
 
         egui::CentralPanel::default().show(ctx, |ui| {

@@ -1,60 +1,48 @@
 #![no_std]
 #![no_main]
 
+use core::net::Ipv4Addr;
 use embassy_executor::Spawner;
+use embassy_net::{
+    tcp::TcpSocket, IpListenEndpoint, Ipv4Cidr, Runner, StackResources, StaticConfigV4,
+};
+use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+use embassy_sync::pubsub::PubSubChannel;
+use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Timer};
 use esp_backtrace as _;
+use esp_hal::interrupt;
+use esp_hal::ledc::channel::ChannelIFace;
+use esp_hal::ledc::timer::TimerIFace;
 use esp_hal::{
     analog::{adc, adc::Adc, adc::AdcConfig},
     gpio::{AnyPin, Level, Output, OutputConfig, Pin},
-    ledc::{
-        channel as ledc_channel, channel::ChannelHW, timer as ledc_timer, Ledc,
-    },
+    ledc::{channel as ledc_channel, channel::ChannelHW, timer as ledc_timer, Ledc},
     rmt::{RxChannelAsync, RxChannelConfig, RxChannelCreatorAsync},
     spi::master::Spi,
     time::Rate,
     timer::timg::TimerGroup,
-    uart::{Uart, RxConfig, UartInterrupt},
-    Async,
-    Blocking,
+    uart::{RxConfig, Uart, UartInterrupt},
+    Async, Blocking,
 };
-use esp_hal::interrupt;
-use esp_hal::ledc::timer::TimerIFace;
-use esp_hal::ledc::channel::ChannelIFace;
 use esp_println::{print, println};
-use static_cell::StaticCell;
-use ringbuffer::ConstGenericRingBuffer;
-use core::net::Ipv4Addr;
-use embassy_net::{
-    IpListenEndpoint,
-    Ipv4Cidr,
-    Runner,
-    StackResources,
-    StaticConfigV4,
-    tcp::TcpSocket,
-};
+use esp_wifi::wifi::WifiDevice;
 use esp_wifi::{
-    EspWifiController,
     init,
     wifi::{
-        AccessPointConfiguration,
-        ClientConfiguration,
-        Configuration,
-        WifiController,
-        WifiEvent,
+        AccessPointConfiguration, ClientConfiguration, Configuration, WifiController, WifiEvent,
         WifiState,
     },
+    EspWifiController,
 };
-use embassy_sync::pubsub::PubSubChannel;
-use esp_wifi::wifi::WifiDevice;
-use embassy_sync::signal::Signal;
-use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+use ringbuffer::ConstGenericRingBuffer;
+use static_cell::StaticCell;
 extern crate alloc;
-use core::cell::RefCell;
-use critical_section::Mutex;
 use alloc::collections::VecDeque;
-use ringbuffer::RingBuffer;
+use core::cell::RefCell;
 use core::sync::atomic::{AtomicU32, Ordering};
+use critical_section::Mutex;
+use ringbuffer::RingBuffer;
 
 mod sensors;
 mod shared;
@@ -90,13 +78,21 @@ const LIDAR_BUFFER_SIZE: usize = sensors::PACKET_SIZE * 4;
 const LIDAR_EVENT_QUEUE_SIZE: usize = 128;
 
 static UART2: StaticCell<Mutex<RefCell<Option<Uart<'static, Blocking>>>>> = StaticCell::new();
-static LIDAR_BYTE_BUFFER: StaticCell<Mutex<RefCell<ConstGenericRingBuffer<u8, LIDAR_BUFFER_SIZE>>>> = StaticCell::new();
-static LIDAR_EVENT_QUEUE: StaticCell<Mutex<RefCell<ConstGenericRingBuffer<kasari::InputEvent, LIDAR_EVENT_QUEUE_SIZE>>>> = StaticCell::new();
+static LIDAR_BYTE_BUFFER: StaticCell<
+    Mutex<RefCell<ConstGenericRingBuffer<u8, LIDAR_BUFFER_SIZE>>>,
+> = StaticCell::new();
+static LIDAR_EVENT_QUEUE: StaticCell<
+    Mutex<RefCell<ConstGenericRingBuffer<kasari::InputEvent, LIDAR_EVENT_QUEUE_SIZE>>>,
+> = StaticCell::new();
 static SIGNAL_LIDAR: StaticCell<Signal<NoopRawMutex, ()>> = StaticCell::new();
 
 static mut UART2_REF: Option<&'static Mutex<RefCell<Option<Uart<'static, Blocking>>>>> = None;
-static mut LIDAR_BYTE_BUFFER_REF: Option<&'static Mutex<RefCell<ConstGenericRingBuffer<u8, LIDAR_BUFFER_SIZE>>>> = None;
-static mut LIDAR_EVENT_QUEUE_REF: Option<&'static Mutex<RefCell<ConstGenericRingBuffer<kasari::InputEvent, LIDAR_EVENT_QUEUE_SIZE>>>> = None;
+static mut LIDAR_BYTE_BUFFER_REF: Option<
+    &'static Mutex<RefCell<ConstGenericRingBuffer<u8, LIDAR_BUFFER_SIZE>>>,
+> = None;
+static mut LIDAR_EVENT_QUEUE_REF: Option<
+    &'static Mutex<RefCell<ConstGenericRingBuffer<kasari::InputEvent, LIDAR_EVENT_QUEUE_SIZE>>>,
+> = None;
 static mut SIGNAL_LIDAR_REF: Option<&'static Signal<NoopRawMutex, ()>> = None;
 
 static LIDAR_PACKET_COUNT: AtomicU32 = AtomicU32::new(0);
@@ -169,7 +165,8 @@ async fn main(spawner: Spawner) {
     _ = channel1.set_duty(0);
 
     // 50Hz square wave to LIDAR encoder input (LEDC channel 2)
-    let lidar_encoder_output_pin = Output::new(peripherals.GPIO13, Level::Low, OutputConfig::default());
+    let lidar_encoder_output_pin =
+        Output::new(peripherals.GPIO13, Level::Low, OutputConfig::default());
 
     let mut lstimer2 = ledc.timer::<esp_hal::ledc::LowSpeed>(ledc_timer::Number::Timer2);
     lstimer2
@@ -192,7 +189,10 @@ async fn main(spawner: Spawner) {
     // UART2
     let (tx_pin, rx_pin) = (peripherals.GPIO17, peripherals.GPIO16);
     let config = esp_hal::uart::Config::default()
-        .with_rx(esp_hal::uart::RxConfig::default().with_fifo_full_threshold(sensors::PACKET_SIZE as u16))
+        .with_rx(
+            esp_hal::uart::RxConfig::default()
+                .with_fifo_full_threshold(sensors::PACKET_SIZE as u16),
+        )
         .with_baudrate(115200);
     let mut uart2 = Uart::new(peripherals.UART2, config)
         .unwrap()
@@ -203,13 +203,23 @@ async fn main(spawner: Spawner) {
     uart2.listen(UartInterrupt::RxFifoFull);
 
     let uart_static = UART2.init(Mutex::new(RefCell::new(Some(uart2))));
-    unsafe { UART2_REF = Some(uart_static); }
-    let byte_buffer = LIDAR_BYTE_BUFFER.init(Mutex::new(RefCell::new(ConstGenericRingBuffer::new())));
-    unsafe { LIDAR_BYTE_BUFFER_REF = Some(byte_buffer); }
-    let lidar_event_queue = LIDAR_EVENT_QUEUE.init(Mutex::new(RefCell::new(ConstGenericRingBuffer::new())));
-    unsafe { LIDAR_EVENT_QUEUE_REF = Some(lidar_event_queue); }
+    unsafe {
+        UART2_REF = Some(uart_static);
+    }
+    let byte_buffer =
+        LIDAR_BYTE_BUFFER.init(Mutex::new(RefCell::new(ConstGenericRingBuffer::new())));
+    unsafe {
+        LIDAR_BYTE_BUFFER_REF = Some(byte_buffer);
+    }
+    let lidar_event_queue =
+        LIDAR_EVENT_QUEUE.init(Mutex::new(RefCell::new(ConstGenericRingBuffer::new())));
+    unsafe {
+        LIDAR_EVENT_QUEUE_REF = Some(lidar_event_queue);
+    }
     let signal_lidar = SIGNAL_LIDAR.init(Signal::new());
-    unsafe { SIGNAL_LIDAR_REF = Some(signal_lidar); }
+    unsafe {
+        SIGNAL_LIDAR_REF = Some(signal_lidar);
+    }
 
     // SPI (ADXL373)
     let sclk = peripherals.GPIO18;
@@ -241,8 +251,12 @@ async fn main(spawner: Spawner) {
 
     // Spawn tasks
     spawner.spawn(sensors::lidar_publisher(event_channel)).ok();
-    spawner.spawn(sensors::accelerometer_task(spi, event_channel)).ok();
-    spawner.spawn(sensors::rmt_task(rmt_ch0, event_channel)).ok();
+    spawner
+        .spawn(sensors::accelerometer_task(spi, event_channel))
+        .ok();
+    spawner
+        .spawn(sensors::rmt_task(rmt_ch0, event_channel))
+        .ok();
 
     // Initialize the Wi-Fi controller
     let esp_wifi_ctrl = &*mk_static!(
@@ -296,7 +310,9 @@ async fn main(spawner: Spawner) {
     spawner.spawn(net_task(sta_runner)).ok();
     spawner.spawn(print_ap_link_task(ap_stack)).ok();
     spawner.spawn(print_sta_ip_task(sta_stack, SSID)).ok();
-    spawner.spawn(listener_task(ap_stack, sta_stack, event_channel)).ok();
+    spawner
+        .spawn(listener_task(ap_stack, sta_stack, event_channel))
+        .ok();
 
     // Main loop
     let mut logic = shared::kasari::MainLogic::new();
@@ -315,12 +331,10 @@ async fn main(spawner: Spawner) {
                 esp_println::println!("vbat_raw: {:?}, vbat: {:?} V", vbat_raw, vbat);
             }
 
-            publisher.publish_immediate(
-                shared::kasari::InputEvent::Vbat(
-                    embassy_time::Instant::now().as_ticks(),
-                    vbat,
-                )
-            );
+            publisher.publish_immediate(shared::kasari::InputEvent::Vbat(
+                embassy_time::Instant::now().as_ticks(),
+                vbat,
+            ));
         }
 
         while let Some(event) = subscriber.try_next_message_pure() {
@@ -399,11 +413,12 @@ fn uart2_handler() {
                         parsed.distances[2] as f32,
                         parsed.distances[3] as f32,
                     );
-                    let mut queue = unsafe { LIDAR_EVENT_QUEUE_REF.unwrap().borrow(cs).borrow_mut() };
+                    let mut queue =
+                        unsafe { LIDAR_EVENT_QUEUE_REF.unwrap().borrow(cs).borrow_mut() };
                     queue.push(event);
 
-                    let packet_i = LIDAR_PACKET_COUNT.fetch_add(1, Ordering::Relaxed);;
-                    if (packet_i % 20 == 1 || shared::LOG_ALL_LIDAR)  && shared::LOG_LIDAR {
+                    let packet_i = LIDAR_PACKET_COUNT.fetch_add(1, Ordering::Relaxed);
+                    if (packet_i % 20 == 1 || shared::LOG_ALL_LIDAR) && shared::LOG_LIDAR {
                         // This message has to be quite short when logging all
                         // LIDAR messages instead of just every 20th
                         println!(
@@ -427,7 +442,9 @@ fn uart2_handler() {
             }
         }
     });
-    unsafe { SIGNAL_LIDAR_REF.unwrap().signal(()); }
+    unsafe {
+        SIGNAL_LIDAR_REF.unwrap().signal(());
+    }
 }
 
 #[embassy_executor::task]
@@ -484,7 +501,10 @@ async fn print_sta_ip_task(sta_stack: embassy_net::Stack<'static>, ssid: &'stati
         if let Some(config) = sta_stack.config_v4() {
             sta_address = Some(config.address.address());
             println!("Got IP: {}", sta_address.unwrap());
-            println!("Or connect to the ap `{ssid}` and connect to TCP {}:8080", sta_address.unwrap());
+            println!(
+                "Or connect to the ap `{ssid}` and connect to TCP {}:8080",
+                sta_address.unwrap()
+            );
             break;
         }
         println!("Waiting for IP...");
@@ -497,7 +517,11 @@ use embassy_futures::select::{select, Either};
 use embedded_io_async::{Read, Write};
 
 #[embassy_executor::task]
-async fn listener_task(ap_stack: embassy_net::Stack<'static>, sta_stack: embassy_net::Stack<'static>, event_channel: &'static EventChannel) {
+async fn listener_task(
+    ap_stack: embassy_net::Stack<'static>,
+    sta_stack: embassy_net::Stack<'static>,
+    event_channel: &'static EventChannel,
+) {
     let mut subscriber = event_channel.subscriber().unwrap();
     let mut publisher = event_channel.publisher().unwrap();
 
@@ -512,9 +536,16 @@ async fn listener_task(ap_stack: embassy_net::Stack<'static>, sta_stack: embassy
     loop {
         println!("Wait for connection...");
         let either = select(
-            ap_socket.accept(IpListenEndpoint { addr: None, port: 8080 }),
-            sta_socket.accept(IpListenEndpoint { addr: None, port: 8080 }),
-        ).await;
+            ap_socket.accept(IpListenEndpoint {
+                addr: None,
+                port: 8080,
+            }),
+            sta_socket.accept(IpListenEndpoint {
+                addr: None,
+                port: 8080,
+            }),
+        )
+        .await;
 
         let (r, mut socket) = match either {
             Either::First(r) => (r, &mut ap_socket),
@@ -560,15 +591,18 @@ async fn listener_task(ap_stack: embassy_net::Stack<'static>, sta_stack: embassy
                     // Process binary events
                     while rx_pos >= 1 {
                         let tag = rx_buffer[0];
-                        if tag == 4 {  // Assuming tag 4 for WifiControl
-                            if rx_pos >= 1 + 8 + 1 + 4 + 4 + 4 {  // u8 tag + u64 ts + u8 mode + 3*f32
+                        if tag == 4 {
+                            // Assuming tag 4 for WifiControl
+                            if rx_pos >= 1 + 8 + 1 + 4 + 4 + 4 {
+                                // u8 tag + u64 ts + u8 mode + 3*f32
                                 let ts = u64::from_le_bytes(rx_buffer[1..9].try_into().unwrap());
                                 let mode = rx_buffer[9];
                                 let r = f32::from_le_bytes(rx_buffer[10..14].try_into().unwrap());
                                 let m = f32::from_le_bytes(rx_buffer[14..18].try_into().unwrap());
                                 let t = f32::from_le_bytes(rx_buffer[18..22].try_into().unwrap());
                                 publisher.publish_immediate(
-                                    shared::kasari::InputEvent::WifiControl(ts, mode, r, m, t)                        );
+                                    shared::kasari::InputEvent::WifiControl(ts, mode, r, m, t),
+                                );
                                 // Shift buffer
                                 let shift_len = 22;
                                 rx_buffer.copy_within(shift_len.., 0);

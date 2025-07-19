@@ -2,12 +2,12 @@
 #![cfg_attr(target_os = "none", no_std)]
 use core::cell::RefCell;
 use critical_section::Mutex;
-use ringbuffer::ConstGenericRingBuffer;
-use embassy_sync::pubsub::PubSubChannel;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use static_cell::StaticCell;
-use num_traits::ops::euclid::Euclid;
+use embassy_sync::pubsub::PubSubChannel;
 use num_traits::float::FloatCore;
+use num_traits::ops::euclid::Euclid;
+use ringbuffer::ConstGenericRingBuffer;
+use static_cell::StaticCell;
 
 #[cfg(target_os = "none")]
 use embassy_time::Instant;
@@ -34,7 +34,10 @@ pub fn get_current_timestamp() -> u64 {
     }
     #[cfg(not(target_os = "none"))]
     {
-        SystemTime::now().duration_since(UNIX_EPOCH).expect("Time went backwards").as_micros() as u64
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("Time went backwards")
+            .as_micros() as u64
     }
 }
 
@@ -42,35 +45,47 @@ pub fn get_current_timestamp() -> u64 {
 // wants &f32 on ESP32 and f32 on PC
 pub fn rem_euclid_f32(x: f32, y: f32) -> f32 {
     #[cfg(not(target_os = "none"))]
-    { x.rem_euclid(y) }
+    {
+        x.rem_euclid(y)
+    }
     #[cfg(target_os = "none")]
-    { x.rem_euclid(&y) }
+    {
+        x.rem_euclid(&y)
+    }
 }
 
 pub mod kasari {
-    use crate::shared::{LOG_RECEIVER, LOG_DETECTION, get_current_timestamp};
+    use crate::shared::CriticalSectionRawMutex;
+    use crate::shared::ObjectDetector;
+    use crate::shared::{get_current_timestamp, LOG_DETECTION, LOG_RECEIVER};
     #[cfg(target_os = "none")]
-	use alloc::vec::Vec;
-    #[cfg(not(target_os = "none"))]
-    use std::vec::Vec;
+    use alloc::vec::Vec;
     #[cfg(target_os = "none")]
     use esp_println::println;
-	use crate::shared::ObjectDetector;
-    use crate::shared::CriticalSectionRawMutex;
+    #[cfg(not(target_os = "none"))]
+    use std::vec::Vec;
 
-	#[derive(Clone, Debug)]
+    #[derive(Clone, Debug)]
     pub enum InputEvent {
         Lidar(u64, f32, f32, f32, f32), // timestamp, distance samples (mm)
-        Accelerometer(u64, f32, f32),        // timestamp, acceleration Y (G), acceleration Z (G)
+        Accelerometer(u64, f32, f32),   // timestamp, acceleration Y (G), acceleration Z (G)
         Receiver(u64, u8, Option<f32>), // timestamp, channel (0=throttle), pulse length (us)
         Vbat(u64, f32),                 // timestamp, battery voltage (V)
-        WifiControl(u64, u8, f32, f32, f32),// timestamp, mode, rotation speed, movement speed, turning speed
-        Planner(u64, MotorControlPlan, (f32, f32), (f32, f32), (f32, f32), f32, f32), // timestamp, MCP, latest_closest_wall, latest_open_space, latest_object_pos, measured_rpm
+        WifiControl(u64, u8, f32, f32, f32), // timestamp, mode, rotation speed, movement speed, turning speed
+        Planner(
+            u64,
+            MotorControlPlan,
+            (f32, f32),
+            (f32, f32),
+            (f32, f32),
+            f32,
+            f32,
+        ), // timestamp, MCP, latest_closest_wall, latest_open_space, latest_object_pos, measured_rpm
     }
 
     #[derive(Clone, Copy, Debug)]
     pub struct MotorControlPlan {
-		pub timestamp: u64,
+        pub timestamp: u64,
         pub rotation_speed: f32,
         pub movement_x: f32,
         pub movement_y: f32,
@@ -97,15 +112,15 @@ pub mod kasari {
         pub fn new() -> Self {
             Self {
                 motor_control_plan: None,
-				detector: ObjectDetector::new(),
+                detector: ObjectDetector::new(),
                 acceleration_y: 0.0,
                 acceleration_z: 0.0,
                 vbat: 0.0,
                 vbat_ok: false,
-				control_mode: 0,
-				control_rotation_speed: 0.0,
-				control_movement_speed: 0.0,
-				control_turning_speed: 0.0,
+                control_mode: 0,
+                control_rotation_speed: 0.0,
+                control_movement_speed: 0.0,
+                control_turning_speed: 0.0,
                 latest_closest_wall: (0.0, 0.0),
                 latest_open_space: (0.0, 0.0),
                 latest_object_pos: (0.0, 0.0),
@@ -125,9 +140,9 @@ pub mod kasari {
                     self.acceleration_z = a_z;
                 }
                 InputEvent::Receiver(timestamp, _ch, pulse_length) => {
-					if self.control_mode != 0 {
-						return;
-					}
+                    if self.control_mode != 0 {
+                        return;
+                    }
                     if !self.vbat_ok {
                         self.motor_control_plan = None;
                         return;
@@ -138,12 +153,11 @@ pub mod kasari {
                             if LOG_RECEIVER {
                                 println!(
                                     "pulse_length -> target_speed_percent: {:?} -> {:?}",
-                                    pulse_length,
-                                    target_speed_percent
+                                    pulse_length, target_speed_percent
                                 );
                             }
                             self.motor_control_plan = Some(MotorControlPlan {
-								timestamp: timestamp,
+                                timestamp: timestamp,
                                 rotation_speed: target_speed_percent,
                                 movement_x: 0.0,
                                 movement_y: 0.0,
@@ -162,45 +176,60 @@ pub mod kasari {
                         self.vbat_ok = vbat > 10.0;
                     }
                 }
-				InputEvent::WifiControl(_timestamp, mode, r, m, t) => {
+                InputEvent::WifiControl(_timestamp, mode, r, m, t) => {
                     println!("WifiControl({}, {}, {}, {})", mode, r, m, t);
-					self.control_mode = mode;
-					self.control_rotation_speed = r;
-					self.control_movement_speed = m;
-					self.control_turning_speed = t;
-					if self.control_mode != 1 && self.control_mode != 2 {
-						return;
-					}
+                    self.control_mode = mode;
+                    self.control_rotation_speed = r;
+                    self.control_movement_speed = m;
+                    self.control_turning_speed = t;
+                    if self.control_mode != 1 && self.control_mode != 2 {
+                        return;
+                    }
                     if !self.vbat_ok {
                         self.motor_control_plan = None;
                         return;
                     }
                     if self.control_mode == 1 {
-						let timestamp = get_current_timestamp();
-						self.motor_control_plan = Some(MotorControlPlan {
-							timestamp: timestamp,
-							rotation_speed: self.control_rotation_speed,
+                        let timestamp = get_current_timestamp();
+                        self.motor_control_plan = Some(MotorControlPlan {
+                            timestamp: timestamp,
+                            rotation_speed: self.control_rotation_speed,
                             movement_x: 0.0,
                             movement_y: 0.0,
-						});
-					}
-				}
+                        });
+                    }
+                }
                 InputEvent::Planner(..) => {}
             }
         }
 
-        pub fn step(&mut self, publisher: &mut embassy_sync::pubsub::Publisher<CriticalSectionRawMutex, InputEvent, 32, 2, 6>) {
+        pub fn step(
+            &mut self,
+            publisher: &mut embassy_sync::pubsub::Publisher<
+                CriticalSectionRawMutex,
+                InputEvent,
+                32,
+                2,
+                6,
+            >,
+        ) {
             if let Some(last_ts) = self.detector.last_ts {
                 if last_ts - self.last_planner_ts >= 100_000 {
                     self.last_planner_ts = last_ts;
 
-                    let (closest_wall, open_space, object_pos) = self.detector.detect_objects(false);
+                    let (closest_wall, open_space, object_pos) =
+                        self.detector.detect_objects(false);
                     self.latest_closest_wall = closest_wall;
                     self.latest_open_space = open_space;
                     self.latest_object_pos = object_pos;
                     if LOG_DETECTION {
-                        println!("Detected: Wall {:?}, Open {:?}, Object {:?} (bins={})",
-                                closest_wall, open_space, object_pos, self.detector.bin_count());
+                        println!(
+                            "Detected: Wall {:?}, Open {:?}, Object {:?} (bins={})",
+                            closest_wall,
+                            open_space,
+                            object_pos,
+                            self.detector.bin_count()
+                        );
                     }
 
                     let plan = if let Some(ref p) = self.motor_control_plan {
@@ -213,90 +242,88 @@ pub mod kasari {
                             movement_y: 0.0,
                         }
                     };
-                    publisher.publish_immediate(
-                        InputEvent::Planner(
-                            last_ts,
-                            plan,
-                            closest_wall,
-                            open_space,
-                            object_pos,
-                            self.detector.theta,
-                            self.detector.rpm,
-                        )
-                    );
+                    publisher.publish_immediate(InputEvent::Planner(
+                        last_ts,
+                        plan,
+                        closest_wall,
+                        open_space,
+                        object_pos,
+                        self.detector.theta,
+                        self.detector.rpm,
+                    ));
                 }
             }
         }
     }
 
-	const TAG_XOR: u16 = 0x5555;
+    const TAG_XOR: u16 = 0x5555;
 
-	pub fn serialize_event(event: &InputEvent) -> Vec<u8> {
-		let mut buf = Vec::with_capacity(32);
-		match event {
-			InputEvent::Lidar(ts, d1, d2, d3, d4) => {
-				let tag = (0u16 ^ TAG_XOR).to_le_bytes();
-				buf.extend_from_slice(&tag);
-				buf.extend_from_slice(&ts.to_le_bytes());
-				buf.extend_from_slice(&d1.to_le_bytes());
-				buf.extend_from_slice(&d2.to_le_bytes());
-				buf.extend_from_slice(&d3.to_le_bytes());
-				buf.extend_from_slice(&d4.to_le_bytes());
-			}
-			InputEvent::Accelerometer(ts, accel_y, accel_z) => {
-				let tag = (1u16 ^ TAG_XOR).to_le_bytes();
-				buf.extend_from_slice(&tag);
-				buf.extend_from_slice(&ts.to_le_bytes());
-				buf.extend_from_slice(&accel_y.to_le_bytes());
-				buf.extend_from_slice(&accel_z.to_le_bytes());
-			}
-			InputEvent::Receiver(ts, channel, pulse_length) => {
-				let tag = (2u16 ^ TAG_XOR).to_le_bytes();
-				buf.extend_from_slice(&tag);
-				buf.extend_from_slice(&ts.to_le_bytes());
-				buf.push(*channel);
-				match pulse_length {
-					Some(pl) => {
-						buf.push(1);  // Flag 1
-						buf.extend_from_slice(&pl.to_le_bytes());
-					}
-					None => {
-						buf.push(0);  // Flag 0
-					}
-				}
-			}
-			InputEvent::Vbat(ts, voltage) => {
-				let tag = (3u16 ^ TAG_XOR).to_le_bytes();
-				buf.extend_from_slice(&tag);
-				buf.extend_from_slice(&ts.to_le_bytes());
-				buf.extend_from_slice(&voltage.to_le_bytes());
-			}
-			InputEvent::WifiControl(ts, mode, r, m, t) => {
-				let tag = (4u16 ^ TAG_XOR).to_le_bytes();
-				buf.extend_from_slice(&tag);
-				buf.extend_from_slice(&ts.to_le_bytes());
-				buf.push(*mode);
-				buf.extend_from_slice(&r.to_le_bytes());
-				buf.extend_from_slice(&m.to_le_bytes());
-				buf.extend_from_slice(&t.to_le_bytes());
-			}
+    pub fn serialize_event(event: &InputEvent) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(32);
+        match event {
+            InputEvent::Lidar(ts, d1, d2, d3, d4) => {
+                let tag = (0u16 ^ TAG_XOR).to_le_bytes();
+                buf.extend_from_slice(&tag);
+                buf.extend_from_slice(&ts.to_le_bytes());
+                buf.extend_from_slice(&d1.to_le_bytes());
+                buf.extend_from_slice(&d2.to_le_bytes());
+                buf.extend_from_slice(&d3.to_le_bytes());
+                buf.extend_from_slice(&d4.to_le_bytes());
+            }
+            InputEvent::Accelerometer(ts, accel_y, accel_z) => {
+                let tag = (1u16 ^ TAG_XOR).to_le_bytes();
+                buf.extend_from_slice(&tag);
+                buf.extend_from_slice(&ts.to_le_bytes());
+                buf.extend_from_slice(&accel_y.to_le_bytes());
+                buf.extend_from_slice(&accel_z.to_le_bytes());
+            }
+            InputEvent::Receiver(ts, channel, pulse_length) => {
+                let tag = (2u16 ^ TAG_XOR).to_le_bytes();
+                buf.extend_from_slice(&tag);
+                buf.extend_from_slice(&ts.to_le_bytes());
+                buf.push(*channel);
+                match pulse_length {
+                    Some(pl) => {
+                        buf.push(1); // Flag 1
+                        buf.extend_from_slice(&pl.to_le_bytes());
+                    }
+                    None => {
+                        buf.push(0); // Flag 0
+                    }
+                }
+            }
+            InputEvent::Vbat(ts, voltage) => {
+                let tag = (3u16 ^ TAG_XOR).to_le_bytes();
+                buf.extend_from_slice(&tag);
+                buf.extend_from_slice(&ts.to_le_bytes());
+                buf.extend_from_slice(&voltage.to_le_bytes());
+            }
+            InputEvent::WifiControl(ts, mode, r, m, t) => {
+                let tag = (4u16 ^ TAG_XOR).to_le_bytes();
+                buf.extend_from_slice(&tag);
+                buf.extend_from_slice(&ts.to_le_bytes());
+                buf.push(*mode);
+                buf.extend_from_slice(&r.to_le_bytes());
+                buf.extend_from_slice(&m.to_le_bytes());
+                buf.extend_from_slice(&t.to_le_bytes());
+            }
             InputEvent::Planner(ts, plan, cw, os, op, theta, rpm) => {
-				let tag = (5u16 ^ TAG_XOR).to_le_bytes();
-				buf.extend_from_slice(&tag);
-				buf.extend_from_slice(&ts.to_le_bytes());
-				buf.extend_from_slice(&plan.rotation_speed.to_le_bytes());
-				buf.extend_from_slice(&plan.movement_x.to_le_bytes());
-				buf.extend_from_slice(&plan.movement_y.to_le_bytes());
-				buf.extend_from_slice(&cw.0.to_le_bytes());
-				buf.extend_from_slice(&cw.1.to_le_bytes());
-				buf.extend_from_slice(&os.0.to_le_bytes());
-				buf.extend_from_slice(&os.1.to_le_bytes());
-				buf.extend_from_slice(&op.0.to_le_bytes());
-				buf.extend_from_slice(&op.1.to_le_bytes());
+                let tag = (5u16 ^ TAG_XOR).to_le_bytes();
+                buf.extend_from_slice(&tag);
+                buf.extend_from_slice(&ts.to_le_bytes());
+                buf.extend_from_slice(&plan.rotation_speed.to_le_bytes());
+                buf.extend_from_slice(&plan.movement_x.to_le_bytes());
+                buf.extend_from_slice(&plan.movement_y.to_le_bytes());
+                buf.extend_from_slice(&cw.0.to_le_bytes());
+                buf.extend_from_slice(&cw.1.to_le_bytes());
+                buf.extend_from_slice(&os.0.to_le_bytes());
+                buf.extend_from_slice(&os.1.to_le_bytes());
+                buf.extend_from_slice(&op.0.to_le_bytes());
+                buf.extend_from_slice(&op.1.to_le_bytes());
                 buf.extend_from_slice(&theta.to_le_bytes());
                 buf.extend_from_slice(&rpm.to_le_bytes());
-			}
-		}
-		buf
-	}
+            }
+        }
+        buf
+    }
 }
