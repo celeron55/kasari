@@ -53,3 +53,11 @@ many samples from it as possible. There is no LIDAR motor. Instead, the entire
 robot spins. There is no TX line to the LIDAR, only RX. The LIDAR encodes 4
 evenly spaced measurements per event.
 
+When operating, the robot produces an event log which is captured over wifi
+using tools/event_monitor.py.
+
+This event log can be replayed by the simulator. The simulator displays the
+robot's Planner events which indicate what the robot was doing. The simulator
+also runs its own instance of the algorithm and displays the output of that.
+This way, the robot's behavior can be compared to the simulator's behavior.
+
