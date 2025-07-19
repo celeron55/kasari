@@ -189,15 +189,7 @@ struct MyApp {
     last_real: Instant,
     current_lidar_points: Vec<(f32, f32)>,
     debug: bool,
-    latest_planner: Option<(
-        u64,
-        MotorControlPlan,
-        (f32, f32),
-        (f32, f32),
-        (f32, f32),
-        f32,
-        f32,
-    )>,
+    latest_planner: Option<InputEvent>,
     show_planner_theta: bool,
     theta_offset: f32,
 }
@@ -251,14 +243,20 @@ impl MyApp {
         self.logic.feed_event(cloned_event);
         if self.debug {
             match event {
-                InputEvent::Lidar(ts, d1, d2, d3, d4) => println!("Processed Lidar ts={} d=({:.0},{:.0},{:.0},{:.0}) theta={:.4} rpm={:.2}", *ts, *d1, *d2, *d3, *d4, self.logic.detector.theta, self.logic.detector.rpm),
-                InputEvent::Accelerometer(ts, ay, az) => println!("Processed Accel ts={} ay={:.2} az={:.2} theta={:.4} rpm={:.2}", *ts, *ay, *az, self.logic.detector.theta, self.logic.detector.rpm),
-                _ => {},
+                InputEvent::Lidar(ts, d1, d2, d3, d4) => println!(
+                    "Processed Lidar ts={} d=({:.0},{:.0},{:.0},{:.0}) theta={:.4} rpm={:.2}",
+                    *ts, *d1, *d2, *d3, *d4, self.logic.detector.theta, self.logic.detector.rpm
+                ),
+                InputEvent::Accelerometer(ts, ay, az) => println!(
+                    "Processed Accel ts={} ay={:.2} az={:.2} theta={:.4} rpm={:.2}",
+                    *ts, *ay, *az, self.logic.detector.theta, self.logic.detector.rpm
+                ),
+                _ => {}
             }
         }
         if let InputEvent::Planner(ts, plan, cw, os, op, theta, rpm) = event {
             self.theta_offset = self.logic.detector.theta - *theta;
-            self.latest_planner = Some((*ts, *plan, *cw, *os, *op, *theta, *rpm));
+            self.latest_planner = Some(event.clone());
             self.show_planner_theta = true;
             if self.debug {
                 println!("Processed Planner ts={} plan={:?} theta={:.4} (sim: {:.4}) rpm={:.2} (sim: {:.4})", ts, plan, *theta, self.logic.detector.theta, rpm, self.logic.detector.rpm);
@@ -331,11 +329,20 @@ impl eframe::App for MyApp {
                 object_pos.0, object_pos.1);
         }
 
-        let target_rpm = self
-            .latest_planner
-            .as_ref()
-            .map_or(0.0, |p| p.1.rotation_speed);
-        let measured_rpm = self.latest_planner.as_ref().map_or(0.0, |p| p.6);
+        let target_rpm = self.latest_planner.as_ref().map_or(0.0, |p| {
+            if let InputEvent::Planner(_, plan, _, _, _, _, _) = p {
+                plan.rotation_speed
+            } else {
+                0.0
+            }
+        });
+        let measured_rpm = self.latest_planner.as_ref().map_or(0.0, |p| {
+            if let InputEvent::Planner(_, _, _, _, _, _, rpm) = p {
+                *rpm
+            } else {
+                0.0
+            }
+        });
 
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading(format!(
@@ -429,57 +436,59 @@ impl eframe::App for MyApp {
                     );
                 }
 
-                if let Some((ts, plan, cw, os, op, theta, rpm)) = &self.latest_planner {
-                    let offset = self.theta_offset;
+                if let Some(event) = &self.latest_planner {
+                    if let InputEvent::Planner(ts, plan, cw, os, op, theta, rpm) = event {
+                        let offset = self.theta_offset;
 
-                    // Rotate and draw movement vector as yellow line
-                    let (rot_mv_x, rot_mv_y) = self.rotate_point(plan.movement_x, plan.movement_y, offset);
-                    plot_ui.line(
-                        Line::new(PlotPoints::new(vec![
-                            [0.0, 0.0],
-                            [rot_mv_x, rot_mv_y],
-                        ]))
-                        .color(egui::Color32::YELLOW)
-                        .width(2.0),
-                    );
+                        // Rotate and draw movement vector as yellow line
+                        let (rot_mv_x, rot_mv_y) = self.rotate_point(plan.movement_x, plan.movement_y, offset);
+                        plot_ui.line(
+                            Line::new(PlotPoints::new(vec![
+                                [0.0, 0.0],
+                                [rot_mv_x, rot_mv_y],
+                            ]))
+                            .color(egui::Color32::YELLOW)
+                            .width(2.0),
+                        );
 
-                    // Draw detection vectors as large dots after rotation
-                    let dot_radius = 10.0;
-                    if cw.0 != 0.0 || cw.1 != 0.0 {
-                        let (rot_x, rot_y) = self.rotate_point(cw.0, cw.1, offset);
-                        plot_ui.points(
-                            egui_plot::Points::new(vec![[rot_x, rot_y]])
-                                .color(egui::Color32::GREEN)
-                                .radius(dot_radius),
-                        );
-                    }
-                    if os.0 != 0.0 || os.1 != 0.0 {
-                        let (rot_x, rot_y) = self.rotate_point(os.0, os.1, offset);
-                        plot_ui.points(
-                            egui_plot::Points::new(vec![[rot_x, rot_y]])
-                                .color(egui::Color32::BLUE)
-                                .radius(dot_radius),
-                        );
-                    }
-                    if op.0 != 100.0 || op.1 != 100.0 {
-                        let (rot_x, rot_y) = self.rotate_point(op.0, op.1, offset);
-                        plot_ui.points(
-                            egui_plot::Points::new(vec![[rot_x, rot_y]])
-                                .color(egui::Color32::from_rgb(128, 0, 128))
-                                .radius(dot_radius),
-                        );
-                    }
+                        // Draw detection vectors as large dots after rotation
+                        let dot_radius = 10.0;
+                        if cw.0 != 0.0 || cw.1 != 0.0 {
+                            let (rot_x, rot_y) = self.rotate_point(cw.0, cw.1, offset);
+                            plot_ui.points(
+                                egui_plot::Points::new(vec![[rot_x, rot_y]])
+                                    .color(egui::Color32::GREEN)
+                                    .radius(dot_radius),
+                            );
+                        }
+                        if os.0 != 0.0 || os.1 != 0.0 {
+                            let (rot_x, rot_y) = self.rotate_point(os.0, os.1, offset);
+                            plot_ui.points(
+                                egui_plot::Points::new(vec![[rot_x, rot_y]])
+                                    .color(egui::Color32::BLUE)
+                                    .radius(dot_radius),
+                            );
+                        }
+                        if op.0 != 100.0 || op.1 != 100.0 {
+                            let (rot_x, rot_y) = self.rotate_point(op.0, op.1, offset);
+                            plot_ui.points(
+                                egui_plot::Points::new(vec![[rot_x, rot_y]])
+                                    .color(egui::Color32::from_rgb(128, 0, 128))
+                                    .radius(dot_radius),
+                            );
+                        }
 
-                    // Draw theta as yellow dot if show_planner_theta, rotated
-                    if self.show_planner_theta {
-                        let adjusted_theta = *theta + offset;
-                        let theta_x = 200.0 * adjusted_theta.cos() as f64;
-                        let theta_y = 200.0 * adjusted_theta.sin() as f64;
-                        plot_ui.points(
-                            egui_plot::Points::new(vec![[theta_x, theta_y]])
-                                .color(egui::Color32::YELLOW)
-                                .radius(8.0),
-                        );
+                        // Draw theta as yellow dot if show_planner_theta, rotated
+                        if self.show_planner_theta {
+                            let adjusted_theta = *theta + offset;
+                            let theta_x = 200.0 * adjusted_theta.cos() as f64;
+                            let theta_y = 200.0 * adjusted_theta.sin() as f64;
+                            plot_ui.points(
+                                egui_plot::Points::new(vec![[theta_x, theta_y]])
+                                    .color(egui::Color32::YELLOW)
+                                    .radius(8.0),
+                            );
+                        }
                     }
                 }
             });
