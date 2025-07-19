@@ -38,8 +38,8 @@ Receiving events from the robot via wifi:
 $ python tools/event_monitor.py
 
 
-Description of the hardware set-up
-----------------------------------
+Description of the hardware and software
+----------------------------------------
 
 This project implements a spinning robot with a fixed LIDAR mounted onto it. The
 rotation speed is measured using an accelerometer measuring the normal
