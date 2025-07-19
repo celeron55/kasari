@@ -264,24 +264,24 @@ impl MyApp {
                                     }
                                 }
                                 // Update event ts
-                                match event {
+                                event = match event {
                                     InputEvent::Lidar(_, d1, d2, d3, d4) => {
-                                        event = InputEvent::Lidar(adjusted_ts, d1, d2, d3, d4)
+                                        InputEvent::Lidar(adjusted_ts, d1, d2, d3, d4)
                                     }
                                     InputEvent::Accelerometer(_, ay, az) => {
-                                        event = InputEvent::Accelerometer(adjusted_ts, ay, az)
+                                        InputEvent::Accelerometer(adjusted_ts, ay, az)
                                     }
                                     InputEvent::Receiver(_, ch, pulse) => {
-                                        event = InputEvent::Receiver(adjusted_ts, ch, pulse)
+                                        InputEvent::Receiver(adjusted_ts, ch, pulse)
                                     }
                                     InputEvent::Vbat(_, voltage) => {
-                                        event = InputEvent::Vbat(adjusted_ts, voltage)
+                                        InputEvent::Vbat(adjusted_ts, voltage)
                                     }
                                     InputEvent::WifiControl(_, mode, r, m, t) => {
-                                        event = InputEvent::WifiControl(adjusted_ts, mode, r, m, t)
+                                        InputEvent::WifiControl(adjusted_ts, mode, r, m, t)
                                     }
                                     InputEvent::Planner(_, plan, cw, os, op, theta, rpm) => {
-                                        event = InputEvent::Planner(
+                                        InputEvent::Planner(
                                             adjusted_ts,
                                             plan,
                                             cw,
@@ -318,6 +318,53 @@ impl MyApp {
             } else {
                 return false;
             }
+        }
+    }
+
+    fn peek_next_ts(&mut self) -> Option<u64> {
+        if self.next_real_event.is_none() {
+            if !self.read_next_real() {
+                return self.next_inject_ts;
+            }
+        }
+        match (
+            self.next_real_event.as_ref().map(get_ts),
+            self.next_inject_ts,
+        ) {
+            (None, None) => None,
+            (Some(rt), None) => Some(rt),
+            (None, Some(it)) => Some(it),
+            (Some(rt), Some(it)) => Some(rt.min(it)),
+        }
+    }
+
+    fn get_and_process_next(&mut self) -> Option<InputEvent> {
+        let next_real_ts = self.next_real_event.as_ref().map(get_ts);
+        let next_inj_ts = self.next_inject_ts;
+
+        let next_ts_opt = match (next_real_ts, next_inj_ts) {
+            (None, None) => return None,
+            (Some(rt), None) => Some(rt),
+            (None, Some(it)) => Some(it),
+            (Some(rt), Some(it)) => Some(rt.min(it)),
+        };
+
+        if next_ts_opt.is_some() {
+            let is_inject_next =
+                next_inj_ts.map_or(false, |it| next_real_ts.map_or(true, |rt| it <= rt));
+
+            let event = if is_inject_next {
+                let ts = next_inj_ts.unwrap();
+                self.next_inject_ts = Some(ts + 100_000);
+                InputEvent::WifiControl(ts, 2, 0.0, 0.0, 0.0)
+            } else {
+                self.next_real_event.take().unwrap()
+            };
+
+            self.process_event(&event);
+            Some(event)
+        } else {
+            None
         }
     }
 
@@ -373,14 +420,9 @@ impl eframe::App for MyApp {
         self.show_planner_theta = false;
         let mut processed_events = false;
 
-        // If first_ts == 0, read the first event and set first_ts
         if self.first_ts == 0 {
-            if self.next_real_event.is_none() {
-                if self.read_next_real() {
-                    if let Some(event) = &self.next_real_event {
-                        self.first_ts = get_ts(event);
-                    }
-                }
+            if let Some(ts) = self.peek_next_ts() {
+                self.first_ts = ts;
             }
         }
 
@@ -389,40 +431,14 @@ impl eframe::App for MyApp {
                 self.step_requested = false;
                 let mut found_lidar = false;
                 while !found_lidar {
-                    // Load next real if needed
-                    if self.next_real_event.is_none() {
-                        if !self.read_next_real() {
-                            break;
-                        }
-                    }
-
-                    let next_real_ts = self.next_real_event.as_ref().map(get_ts);
-                    let next_inj_ts = self.next_inject_ts;
-
-                    let next_ts_opt = match (next_real_ts, next_inj_ts) {
-                        (None, None) => None,
-                        (Some(rt), None) => Some(rt),
-                        (None, Some(it)) => Some(it),
-                        (Some(rt), Some(it)) => Some(rt.min(it)),
-                    };
-
-                    if let Some(next_ts) = next_ts_opt {
-                        // For step, process until Lidar, regardless of ts
-                        let is_inject_next = next_inj_ts
-                            .map_or(false, |it| next_real_ts.map_or(true, |rt| it <= rt));
-
-                        let event = if is_inject_next {
-                            let ts = next_inj_ts.unwrap();
-                            self.next_inject_ts = Some(ts + 100_000);
-                            InputEvent::WifiControl(ts, 2, 0.0, 0.0, 0.0)
+                    if let Some(next_ts) = self.peek_next_ts() {
+                        if let Some(event) = self.get_and_process_next() {
+                            processed_events = true;
+                            if matches!(&event, InputEvent::Lidar(..)) {
+                                found_lidar = true;
+                            }
                         } else {
-                            self.next_real_event.take().unwrap()
-                        };
-
-                        self.process_event(&event);
-                        processed_events = true;
-                        if matches!(&event, InputEvent::Lidar(..)) {
-                            found_lidar = true;
+                            break;
                         }
                     } else {
                         break;
@@ -438,41 +454,15 @@ impl eframe::App for MyApp {
             let current_sim_ts = self.first_ts as f64 + self.virtual_elapsed * 1_000_000.0;
 
             loop {
-                // Load next real if needed
-                if self.next_real_event.is_none() {
-                    if !self.read_next_real() {
-                        break;
-                    }
-                }
-
-                let next_real_ts = self.next_real_event.as_ref().map(get_ts);
-                let next_inj_ts = self.next_inject_ts;
-
-                let next_ts_opt = match (next_real_ts, next_inj_ts) {
-                    (None, None) => None,
-                    (Some(rt), None) => Some(rt),
-                    (None, Some(it)) => Some(it),
-                    (Some(rt), Some(it)) => Some(rt.min(it)),
-                };
-
-                if let Some(next_ts) = next_ts_opt {
+                if let Some(next_ts) = self.peek_next_ts() {
                     if next_ts as f64 > current_sim_ts {
                         break;
                     }
-
-                    let is_inject_next =
-                        next_inj_ts.map_or(false, |it| next_real_ts.map_or(true, |rt| it <= rt));
-
-                    let event = if is_inject_next {
-                        let ts = next_inj_ts.unwrap();
-                        self.next_inject_ts = Some(ts + 100_000);
-                        InputEvent::WifiControl(ts, 2, 0.0, 0.0, 0.0)
+                    if let Some(_) = self.get_and_process_next() {
+                        processed_events = true;
                     } else {
-                        self.next_real_event.take().unwrap()
-                    };
-
-                    self.process_event(&event);
-                    processed_events = true;
+                        break;
+                    }
                 } else {
                     break;
                 }
