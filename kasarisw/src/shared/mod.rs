@@ -104,7 +104,9 @@ pub mod kasari {
             self.detector.update(&event);
 
             match event {
-                InputEvent::Lidar(_timestamp, _d1, _d2, _d3, _d4) => {}
+                InputEvent::Lidar(_timestamp, _d1, _d2, _d3, _d4) => {
+                    self.detector.update(&event);
+                }
                 InputEvent::Accelerometer(_timestamp, a_y, a_z) => {
                     self.acceleration_y = a_y;
                     self.acceleration_z = a_z;
