@@ -317,6 +317,8 @@ impl eframe::App for MyApp {
             }
         }
 
+        self.logic.step(None);
+
         let (closest_wall, open_space, object_pos) = self.logic.detector.detect_objects(self.debug);
 
         if self.debug && processed_events {
@@ -435,6 +437,25 @@ impl eframe::App for MyApp {
                         .width(2.0),
                     );
                 }
+
+                // Visualize simulated MotorControlPlan movement vector
+                if let Some(plan) = &self.logic.motor_control_plan {
+                //{let plan = MotorControlPlan { timestamp: 0, movement_x: 1.0, movement_y: 0.0, rotation_speed: 0.0, };
+                    let speed = (plan.movement_x.powi(2) + plan.movement_y.powi(2)).sqrt();
+                    if speed > 0.0 {
+                        let vis_length = 200.0 * speed as f64;
+                        let dir_x = plan.movement_x / speed;
+                        let dir_y = plan.movement_y / speed;
+                        let mv_x = vis_length * dir_x as f64;
+                        let mv_y = vis_length * dir_y as f64;
+                        plot_ui.line(
+                            Line::new(PlotPoints::new(vec![[0.0, 0.0], [mv_x, mv_y]]))
+                                .color(egui::Color32::from_rgb(255, 165, 0)) // Orange
+                                .width(3.0),
+                        );
+                    }
+                }
+
 
                 if let Some(event) = &self.latest_planner {
                     if let InputEvent::Planner(ts, plan, cw, os, op, theta, rpm) = event {

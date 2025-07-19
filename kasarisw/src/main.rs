@@ -341,7 +341,7 @@ async fn main(spawner: Spawner) {
             logic.feed_event(event);
         }
 
-        logic.step(&mut publisher);
+        logic.step(Some(&mut publisher));
 
         if let Some(ref plan) = logic.motor_control_plan {
             let timestamp = embassy_time::Instant::now().as_ticks();
