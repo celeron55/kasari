@@ -55,21 +55,16 @@ pub async fn lidar_writer(
 }
 
 #[embassy_executor::task]
-pub async fn lidar_publisher(
-    event_channel: &'static EventChannel,
-) {
+pub async fn lidar_publisher(event_channel: &'static EventChannel) {
     let publisher = event_channel.publisher().unwrap();
-
     loop {
         unsafe { SIGNAL_LIDAR_REF.unwrap().wait().await; }
-        let mut events = VecDeque::new();
         critical_section::with(|cs| {
             let mut queue = unsafe { LIDAR_EVENT_QUEUE_REF.unwrap().borrow(cs).borrow_mut() };
-            events = queue.drain(..).collect();
+            while let Some(event) = queue.dequeue() {
+                publisher.publish_immediate(event);
+            }
         });
-        for event in events {
-            publisher.publish_immediate(event);
-        }
     }
 }
 

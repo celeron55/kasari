@@ -87,15 +87,16 @@ fn target_speed_to_pwm_duty(speed_percent: f32, duty_range: u32) -> u32 {
 }
 
 const LIDAR_BUFFER_SIZE: usize = sensors::PACKET_SIZE * 4;
+const LIDAR_EVENT_QUEUE_SIZE: usize = 128;
 
 static UART2: StaticCell<Mutex<RefCell<Option<Uart<'static, Blocking>>>>> = StaticCell::new();
 static LIDAR_BYTE_BUFFER: StaticCell<Mutex<RefCell<ConstGenericRingBuffer<u8, LIDAR_BUFFER_SIZE>>>> = StaticCell::new();
-static LIDAR_EVENT_QUEUE: StaticCell<Mutex<RefCell<VecDeque<kasari::InputEvent>>>> = StaticCell::new();
+static LIDAR_EVENT_QUEUE: StaticCell<Mutex<RefCell<ConstGenericRingBuffer<kasari::InputEvent, LIDAR_EVENT_QUEUE_SIZE>>>> = StaticCell::new();
 static SIGNAL_LIDAR: StaticCell<Signal<NoopRawMutex, ()>> = StaticCell::new();
 
 static mut UART2_REF: Option<&'static Mutex<RefCell<Option<Uart<'static, Blocking>>>>> = None;
 static mut LIDAR_BYTE_BUFFER_REF: Option<&'static Mutex<RefCell<ConstGenericRingBuffer<u8, LIDAR_BUFFER_SIZE>>>> = None;
-static mut LIDAR_EVENT_QUEUE_REF: Option<&'static Mutex<RefCell<VecDeque<kasari::InputEvent>>>> = None;
+static mut LIDAR_EVENT_QUEUE_REF: Option<&'static Mutex<RefCell<ConstGenericRingBuffer<kasari::InputEvent, LIDAR_EVENT_QUEUE_SIZE>>>> = None;
 static mut SIGNAL_LIDAR_REF: Option<&'static Signal<NoopRawMutex, ()>> = None;
 
 static LIDAR_PACKET_COUNT: AtomicU32 = AtomicU32::new(0);
@@ -205,7 +206,7 @@ async fn main(spawner: Spawner) {
     unsafe { UART2_REF = Some(uart_static); }
     let byte_buffer = LIDAR_BYTE_BUFFER.init(Mutex::new(RefCell::new(ConstGenericRingBuffer::new())));
     unsafe { LIDAR_BYTE_BUFFER_REF = Some(byte_buffer); }
-    let lidar_event_queue = LIDAR_EVENT_QUEUE.init(Mutex::new(RefCell::new(VecDeque::new())));
+    let lidar_event_queue = LIDAR_EVENT_QUEUE.init(Mutex::new(RefCell::new(ConstGenericRingBuffer::new())));
     unsafe { LIDAR_EVENT_QUEUE_REF = Some(lidar_event_queue); }
     let signal_lidar = SIGNAL_LIDAR.init(Signal::new());
     unsafe { SIGNAL_LIDAR_REF = Some(signal_lidar); }
@@ -410,7 +411,7 @@ fn uart2_handler() {
                         parsed.distances[3] as f32,
                     );
                     let mut queue = unsafe { LIDAR_EVENT_QUEUE_REF.unwrap().borrow(cs).borrow_mut() };
-                    queue.push_back(event);
+                    queue.push(event);
 
                     let packet_i = LIDAR_PACKET_COUNT.fetch_add(1, Ordering::Relaxed);;
                     if (packet_i % 20 == 1 || shared::LOG_ALL_LIDAR)  && shared::LOG_LIDAR {
