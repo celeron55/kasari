@@ -144,8 +144,9 @@ fn parse_event(line: &str) -> Result<InputEvent, Box<dyn Error>> {
             let op_y = v[10].as_f64().ok_or("Invalid op_y")? as f32;
             let theta = v[11].as_f64().ok_or("Invalid theta")? as f32;
             Ok(InputEvent::Planner(
+                ts,
                 MotorControlPlan {
-                    timestamp: ts,
+                    timestamp: 0,
                     rotation_speed,
                     movement_x,
                     movement_y,
@@ -167,7 +168,7 @@ fn get_ts(event: &InputEvent) -> u64 {
         InputEvent::Receiver(ts, ..) => *ts,
         InputEvent::Vbat(ts, ..) => *ts,
         InputEvent::WifiControl(ts, ..) => *ts,
-        InputEvent::Planner(plan, ..) => plan.timestamp,
+        InputEvent::Planner(ts, ..) => *ts,
     }
 }
 
@@ -261,7 +262,7 @@ impl eframe::App for MyApp {
                         _ => {},
                         }
                     }
-                    if let InputEvent::Planner(plan, cw, os, op, theta) = &event {
+                    if let InputEvent::Planner(ts, plan, cw, os, op, theta) = &event {
                         self.theta_offset = self.logic.detector.theta - *theta;
                         self.latest_planner = Some((*plan, *cw, *os, *op, *theta));
                         self.show_planner_theta = true;
@@ -296,7 +297,7 @@ impl eframe::App for MyApp {
                     _ => {},
                     }
                 }
-                if let InputEvent::Planner(plan, cw, os, op, theta) = &event {
+                if let InputEvent::Planner(ts, plan, cw, os, op, theta) = &event {
                     self.theta_offset = self.logic.detector.theta - *theta;
                     self.latest_planner = Some((*plan, *cw, *os, *op, *theta));
                     self.show_planner_theta = true;

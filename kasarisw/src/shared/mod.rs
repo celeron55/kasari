@@ -65,7 +65,7 @@ pub mod kasari {
         Receiver(u64, u8, Option<f32>), // timestamp, channel (0=throttle), pulse length (us)
         Vbat(u64, f32),                 // timestamp, battery voltage (V)
         WifiControl(u64, u8, f32, f32, f32),// timestamp, mode, rotation speed, movement speed, turning speed
-        Planner(MotorControlPlan, (f32, f32), (f32, f32), (f32, f32), f32),
+        Planner(u64, MotorControlPlan, (f32, f32), (f32, f32), (f32, f32), f32), // timestamp, MCP, latest_closest_wall, latest_open_space, latest_object_pos
     }
 
     #[derive(Clone, Copy)]
@@ -215,6 +215,7 @@ pub mod kasari {
                     };
                     publisher.publish_immediate(
                         InputEvent::Planner(
+                            last_ts,
                             plan,
                             closest_wall,
                             open_space,
@@ -278,10 +279,10 @@ pub mod kasari {
 				buf.extend_from_slice(&m.to_le_bytes());
 				buf.extend_from_slice(&t.to_le_bytes());
 			}
-            InputEvent::Planner(plan, cw, os, op, theta) => {
+            InputEvent::Planner(ts, plan, cw, os, op, theta) => {
 				let tag = (5u16 ^ TAG_XOR).to_le_bytes();
 				buf.extend_from_slice(&tag);
-				buf.extend_from_slice(&plan.timestamp.to_le_bytes());
+				buf.extend_from_slice(&ts.to_le_bytes());
 				buf.extend_from_slice(&plan.rotation_speed.to_le_bytes());
 				buf.extend_from_slice(&plan.movement_x.to_le_bytes());
 				buf.extend_from_slice(&plan.movement_y.to_le_bytes());
