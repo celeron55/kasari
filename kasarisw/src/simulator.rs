@@ -245,6 +245,29 @@ impl MyApp {
         let new_y = x * sin_a + y * cos_a;
         (new_x as f64, new_y as f64)
     }
+
+    fn process_event(&mut self, event: &InputEvent) {
+        let cloned_event = event.clone();
+        self.logic.feed_event(cloned_event);
+        if self.debug {
+            match event {
+                InputEvent::Lidar(ts, d1, d2, d3, d4) => println!("Processed Lidar ts={} d=({:.0},{:.0},{:.0},{:.0}) theta={:.4} rpm={:.2}", *ts, *d1, *d2, *d3, *d4, self.logic.detector.theta, self.logic.detector.rpm),
+                InputEvent::Accelerometer(ts, ay, az) => println!("Processed Accel ts={} ay={:.2} az={:.2} theta={:.4} rpm={:.2}", *ts, *ay, *az, self.logic.detector.theta, self.logic.detector.rpm),
+                _ => {},
+            }
+        }
+        if let InputEvent::Planner(ts, plan, cw, os, op, theta, rpm) = event {
+            self.theta_offset = self.logic.detector.theta - *theta;
+            self.latest_planner = Some((*ts, *plan, *cw, *os, *op, *theta, *rpm));
+            self.show_planner_theta = true;
+            if self.debug {
+                println!("Processed Planner ts={} plan={:?} theta={:.4} (sim: {:.4}) rpm={:.2} (sim: {:.4})", ts, plan, *theta, self.logic.detector.theta, rpm, self.logic.detector.rpm);
+            }
+        }
+        if matches!(event, InputEvent::Lidar(..)) {
+            self.current_lidar_points = self.logic.detector.last_xys.to_vec();
+        }
+    }
 }
 
 impl eframe::App for MyApp {
@@ -272,25 +295,9 @@ impl eframe::App for MyApp {
                 while self.current_event_idx < self.events.len() && !found_lidar {
                     processed_events = true;
                     let event = self.events[self.current_event_idx].clone();
-                    self.logic.feed_event(event.clone());
-                    if self.debug {
-                        match &event {
-                            InputEvent::Lidar(ts, d1, d2, d3, d4) => println!("Processed Lidar ts={} d=({:.0},{:.0},{:.0},{:.0}) theta={:.4} rpm={:.2}", *ts, *d1, *d2, *d3, *d4, self.logic.detector.theta, self.logic.detector.rpm),
-                            InputEvent::Accelerometer(ts, ay, az) => println!("Processed Accel ts={} ay={:.2} az={:.2} theta={:.4} rpm={:.2}", *ts, *ay, *az, self.logic.detector.theta, self.logic.detector.rpm),
-                        _ => {},
-                        }
-                    }
-                    if let InputEvent::Planner(ts, plan, cw, os, op, theta, rpm) = &event {
-                        self.theta_offset = self.logic.detector.theta - *theta;
-                        self.latest_planner = Some((*ts, *plan, *cw, *os, *op, *theta, *rpm));
-                        self.show_planner_theta = true;
-                        if self.debug {
-                            println!("Processed Planner ts={} plan={:?} theta={:.4} (sim: {:.4}) rpm={:.2} (sim: {:.4})", ts, plan, *theta, self.logic.detector.theta, rpm, self.logic.detector.rpm);
-                        }
-                    }
+                    self.process_event(&event);
                     if matches!(&event, InputEvent::Lidar(..)) {
                         found_lidar = true;
-                        self.current_lidar_points = self.logic.detector.last_xys.to_vec();
                     }
                     self.current_event_idx += 1;
                 }
@@ -307,25 +314,7 @@ impl eframe::App for MyApp {
             {
                 processed_events = true;
                 let event = self.events[self.current_event_idx].clone();
-                self.logic.feed_event(event.clone());
-                if self.debug {
-                    match &event {
-                        InputEvent::Lidar(ts, d1, d2, d3, d4) => println!("Processed Lidar ts={} d=({:.0},{:.0},{:.0},{:.0}) theta={:.4} rpm={:.2}", *ts, *d1, *d2, *d3, *d4, self.logic.detector.theta, self.logic.detector.rpm),
-                        InputEvent::Accelerometer(ts, ay, az) => println!("Processed Accel ts={} ay={:.2} az={:.2} theta={:.4} rpm={:.2}", *ts, *ay, *az, self.logic.detector.theta, self.logic.detector.rpm),
-                    _ => {},
-                    }
-                }
-                if let InputEvent::Planner(ts, plan, cw, os, op, theta, rpm) = &event {
-                    self.theta_offset = self.logic.detector.theta - *theta;
-                    self.latest_planner = Some((*ts, *plan, *cw, *os, *op, *theta, *rpm));
-                    self.show_planner_theta = true;
-                    if self.debug {
-                        println!("Processed Planner ts={} plan={:?} theta={:.4} (sim: {:.4}) rpm={:.2} (sim: {:.4})", ts, plan, *theta, self.logic.detector.theta, rpm, self.logic.detector.rpm);
-                    }
-                }
-                if matches!(&event, InputEvent::Lidar(..)) {
-                    self.current_lidar_points = self.logic.detector.last_xys.to_vec();
-                }
+                self.process_event(&event);
                 self.current_event_idx += 1;
             }
         }
