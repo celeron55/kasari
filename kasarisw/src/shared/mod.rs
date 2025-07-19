@@ -218,6 +218,10 @@ pub mod kasari {
             if self.autonomous_start_ts.is_none() {
                 self.autonomous_start_ts = Some(ts);
             }
+            if !self.vbat_ok {
+                self.motor_control_plan = None;
+                return;
+            }
             let ramp_time = (ts - self.autonomous_start_ts.unwrap()) as f32 / 1_000_000.0;
             let rotation_speed = 20.0 * (ramp_time / 2.0).min(1.0);
 
@@ -288,6 +292,8 @@ pub mod kasari {
 
                     if self.autonomous_enabled {
                         self.autonomous_update();
+                    } else {
+                        self.autonomous_start_ts = None;
                     }
 
                     let plan = if let Some(ref p) = self.motor_control_plan {
