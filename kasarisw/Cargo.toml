@@ -25,6 +25,12 @@ arrayvec = { version = "0.7.4", default-features = false, features = [] }
 num-traits = { version = "0.2.19", default-features = false }
 libm = "0.2.8"
 
+[target.'cfg(not(target_os = "none"))'.dependencies]
+clap = { version = "4.5", features = ["derive"] }  # For command-line parsing in simulator.rs
+eframe = "0.28"  # For the GUI framework
+egui_plot = "0.28"  # If needed separately; often bundled with egui/eframe
+serde_json = "1.0"  # For JSON parsing
+
 [target.'xtensa-esp32-none-elf'.dependencies]
 embassy-executor = { version = "0.7.0", features = ["task-arena-size-32768", "executor-thread", "executor-interrupt"] }
 embassy-futures = "0.1.1"

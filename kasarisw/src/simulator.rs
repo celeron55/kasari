@@ -1,19 +1,357 @@
-use std::io;
+use std::error::Error;
+use std::fs::File;
+use std::io::{self, BufRead, BufReader};
+use std::path::Path;
+use std::time::Instant;
+
+use clap::Parser;
+use eframe::egui;
+use egui_plot::{Line, Plot, PlotBounds, PlotPoint, PlotPoints};
+use serde_json::Value;
 
 mod shared;
 use shared::kasari::{InputEvent, MainLogic};
 
-fn main() {
-    println!("Starting simulator...");
-    let mut logic = MainLogic::new();
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// Log file path or '-' for stdin
+    source: String,
 
-    loop {
-        // TODO: Read events from file and feed them to logic
-        logic.feed_event(InputEvent::Vbat(0, 11.0));
+    /// Enable debug prints
+    #[arg(long)]
+    debug: bool,
+}
 
-        logic.step();
+fn main() -> Result<(), Box<dyn Error>> {
+    let args = Args::parse();
 
-        // TODO: Plot lidar points
-        // TODO: Plot detected vectors
+    let mut events: Vec<InputEvent> = Vec::new();
+
+    let lines: Box<dyn Iterator<Item = String>> = if args.source == "-" {
+        Box::new(io::stdin().lines().filter_map(Result::ok))
+    } else {
+        let file = File::open(&args.source)?;
+        let reader = BufReader::new(file);
+        Box::new(reader.lines().filter_map(Result::ok))
+    };
+
+    for line in lines {
+        if line.trim().is_empty() {
+            continue;
+        }
+        match parse_event(&line) {
+            Ok(event) => events.push(event),
+            Err(e) => {
+                eprintln!("Skipping invalid line: {} (error: {})", line.trim(), e);
+                continue;
+            }
+        }
+    }
+
+    if events.is_empty() {
+        eprintln!("No events to process.");
+        return Ok(());
+    }
+
+    events.sort_by_key(|e| get_ts(e));
+
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default().with_inner_size([2000.0, 2000.0]),
+        ..Default::default()
+    };
+
+    eframe::run_native(
+        "Robot Simulator",
+        options,
+        Box::new(move |_cc| Ok(Box::new(MyApp::new(events, args.debug)))),
+    )?;
+
+    Ok(())
+}
+
+fn parse_event(line: &str) -> Result<InputEvent, Box<dyn Error>> {
+    let v: Vec<Value> = serde_json::from_str(line)?;
+
+    if v.is_empty() {
+        return Err("Empty event".into());
+    }
+
+    let typ = v[0].as_str().ok_or("No type")?;
+    let ts = v[1].as_u64().ok_or("No timestamp")?;
+
+    match typ {
+        "Lidar" => {
+            if v.len() != 6 {
+                return Err("Invalid Lidar event length".into());
+            }
+            let d1 = v[2].as_f64().ok_or("Invalid d1")? as f32;
+            let d2 = v[3].as_f64().ok_or("Invalid d2")? as f32;
+            let d3 = v[4].as_f64().ok_or("Invalid d3")? as f32;
+            let d4 = v[5].as_f64().ok_or("Invalid d4")? as f32;
+            Ok(InputEvent::Lidar(ts, d1, d2, d3, d4))
+        }
+        "Accelerometer" => {
+            if v.len() != 4 {
+                return Err("Invalid Accelerometer event length".into());
+            }
+            let ay = v[2].as_f64().ok_or("Invalid ay")? as f32;
+            let az = v[3].as_f64().ok_or("Invalid az")? as f32;
+            Ok(InputEvent::Accelerometer(ts, ay, az))
+        }
+        "Receiver" => {
+            if v.len() != 4 {
+                return Err("Invalid Receiver event length".into());
+            }
+            let ch = v[2].as_u64().ok_or("Invalid channel")? as u8;
+            let pulse = if v[3].is_null() {
+                None
+            } else {
+                Some(v[3].as_f64().ok_or("Invalid pulse")? as f32)
+            };
+            Ok(InputEvent::Receiver(ts, ch, pulse))
+        }
+        "Vbat" => {
+            if v.len() != 3 {
+                return Err("Invalid Vbat event length".into());
+            }
+            let voltage = v[2].as_f64().ok_or("Invalid voltage")? as f32;
+            Ok(InputEvent::Vbat(ts, voltage))
+        }
+        "WifiControl" => {
+            if v.len() != 6 {
+                return Err("Invalid WifiControl event length".into());
+            }
+            let mode = v[2].as_u64().ok_or("Invalid mode")? as u8;
+            let r = v[3].as_f64().ok_or("Invalid r")? as f32;
+            let m = v[4].as_f64().ok_or("Invalid m")? as f32;
+            let t = v[5].as_f64().ok_or("Invalid t")? as f32;
+            Ok(InputEvent::WifiControl(ts, mode, r, m, t))
+        }
+        _ => Err("Unknown event type".into()),
+    }
+}
+
+fn get_ts(event: &InputEvent) -> u64 {
+    match event {
+        InputEvent::Lidar(ts, ..) => *ts,
+        InputEvent::Accelerometer(ts, ..) => *ts,
+        InputEvent::Receiver(ts, ..) => *ts,
+        InputEvent::Vbat(ts, ..) => *ts,
+        InputEvent::WifiControl(ts, ..) => *ts,
+    }
+}
+
+struct MyApp {
+    logic: MainLogic,
+    events: Vec<InputEvent>,
+    current_event_idx: usize,
+    virtual_elapsed: f64,
+    first_ts: u64,
+    mode: String,
+    step_requested: bool,
+    last_real: Instant,
+    current_lidar_points: Vec<(f32, f32)>,
+    debug: bool,
+}
+
+impl MyApp {
+    fn new(events: Vec<InputEvent>, debug: bool) -> Self {
+        let first_ts = if events.is_empty() { 0 } else { get_ts(&events[0]) };
+        Self {
+            logic: MainLogic::new(),
+            events,
+            current_event_idx: 0,
+            virtual_elapsed: 0.0,
+            first_ts,
+            mode: "play".to_string(),
+            step_requested: false,
+            last_real: Instant::now(),
+            current_lidar_points: Vec::new(),
+            debug,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.logic = MainLogic::new();
+        self.current_event_idx = 0;
+        self.virtual_elapsed = 0.0;
+        self.mode = "play".to_string();
+        self.step_requested = false;
+        self.current_lidar_points.clear();
+    }
+}
+
+impl eframe::App for MyApp {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let now = Instant::now();
+        let delta_real = now.duration_since(self.last_real).as_secs_f64();
+        self.last_real = now;
+
+        let mut speed = 0.0;
+        if self.mode == "play" {
+            speed = 1.0;
+        } else if self.mode == "slow" {
+            speed = 0.25;
+        } else if self.mode == "pause" {
+            speed = 0.0;
+        }
+
+        if self.mode == "step" {
+            if self.step_requested {
+                self.step_requested = false;
+                let mut found_lidar = false;
+                while self.current_event_idx < self.events.len() && !found_lidar {
+                    let event = self.events[self.current_event_idx].clone();
+                    let old_len = self.logic.detector.points.len();
+                    self.logic.feed_event(event.clone());
+                    if matches!(event, InputEvent::Lidar(..)) {
+                        found_lidar = true;
+                        let current_ts = get_ts(&event);
+                        self.current_lidar_points = self.logic.detector.points
+                            .iter()
+                            .filter(|pt| pt.2 == current_ts)
+                            .map(|&(x, y, _)| (x, y))
+                            .collect();
+                    }
+                    self.current_event_idx += 1;
+                }
+                if self.current_event_idx > 0 {
+                    let last_ts = get_ts(&self.events[self.current_event_idx - 1]);
+                    self.virtual_elapsed = (last_ts - self.first_ts) as f64 / 1_000_000.0;
+                }
+            }
+        } else {
+            self.virtual_elapsed += delta_real * speed;
+            let current_sim_ts = self.first_ts as f64 + self.virtual_elapsed * 1_000_000.0;
+            while self.current_event_idx < self.events.len()
+                && get_ts(&self.events[self.current_event_idx]) as f64 <= current_sim_ts
+            {
+                let event = self.events[self.current_event_idx].clone();
+                let old_len = self.logic.detector.points.len();
+                self.logic.feed_event(event.clone());
+                if matches!(event, InputEvent::Lidar(..)) {
+                    let current_ts = get_ts(&event);
+                    self.current_lidar_points = self.logic.detector.points
+                        .iter()
+                        .filter(|pt| pt.2 == current_ts)
+                        .map(|&(x, y, _)| (x, y))
+                        .collect();
+                }
+                self.current_event_idx += 1;
+            }
+        }
+
+        let (closest_wall, open_space, object_pos) = self.logic.detector.detect_objects(self.debug);
+
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.heading(format!(
+                "Real-Time Robot LiDAR Simulation\nEvents: {}, TS: {} ms, RPM: {:.2}",
+                self.current_event_idx,
+                self.logic.detector.last_ts.unwrap_or(0) / 1000,
+                self.logic.detector.rpm
+            ));
+
+            let plot = Plot::new("lidar_plot")
+                .include_x(-800.0)
+                .include_x(800.0)
+                .include_y(-800.0)
+                .include_y(800.0)
+                .data_aspect(1.0)
+                .show_axes(true)
+                .show_grid(true)
+                .allow_drag(false)
+                .allow_zoom(false)
+                .allow_scroll(false);
+
+            plot.show(ui, |plot_ui| {
+                plot_ui.set_plot_bounds(PlotBounds::from_min_max([-800., -800.], [800., 800.]));
+
+                let points: Vec<[f64; 2]> = self.logic.detector.points
+                    .iter()
+                    .map(|&(x, y, _)| [x as f64, y as f64])
+                    .collect();
+                plot_ui.points(
+                    egui_plot::Points::new(points)
+                        .color(egui::Color32::BLUE)
+                        .radius(5.0),
+                );
+
+                let h_points: Vec<[f64; 2]> = self.current_lidar_points
+                    .iter()
+                    .map(|&(x, y)| [x as f64, y as f64])
+                    .collect();
+                plot_ui.points(
+                    egui_plot::Points::new(h_points)
+                        .color(egui::Color32::RED)
+                        .radius(6.0),
+                );
+
+                let heading_len: f64 = 200.0;
+                let hx = heading_len * self.logic.detector.theta.cos() as f64;
+                let hy = heading_len * self.logic.detector.theta.sin() as f64;
+                plot_ui.line(
+                    Line::new(PlotPoints::new(vec![[0.0, 0.0], [hx, hy]]))
+                        .color(egui::Color32::RED)
+                        .width(2.0),
+                );
+
+                if closest_wall != (0.0, 0.0) {
+                    plot_ui.line(
+                        Line::new(PlotPoints::new(vec![
+                            [0.0, 0.0],
+                            [closest_wall.0 as f64, closest_wall.1 as f64],
+                        ]))
+                        .color(egui::Color32::GREEN)
+                        .width(2.0),
+                    );
+                }
+
+                if open_space != (0.0, 0.0) {
+                    plot_ui.line(
+                        Line::new(PlotPoints::new(vec![
+                            [0.0, 0.0],
+                            [open_space.0 as f64, open_space.1 as f64],
+                        ]))
+                        .color(egui::Color32::BLUE)
+                        .width(2.0),
+                    );
+                }
+
+                if object_pos != (100.0, 100.0) {
+                    plot_ui.line(
+                        Line::new(PlotPoints::new(vec![
+                            [0.0, 0.0],
+                            [object_pos.0 as f64, object_pos.1 as f64],
+                        ]))
+                        .color(egui::Color32::from_rgb(128, 0, 128))
+                        .width(2.0),
+                    );
+                }
+            });
+        });
+
+        if ctx.input(|i| i.key_pressed(egui::Key::C)) {
+            self.mode = "play".to_string();
+            self.current_lidar_points.clear();
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::X)) {
+            self.mode = "slow".to_string();
+            self.current_lidar_points.clear();
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::Z)) {
+            self.mode = "pause".to_string();
+            self.current_lidar_points.clear();
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::E)) {
+            if self.mode != "step" {
+                self.mode = "step".to_string();
+                self.current_lidar_points.clear();
+            } else {
+                self.step_requested = true;
+            }
+        }
+
+        ctx.request_repaint();
     }
 }

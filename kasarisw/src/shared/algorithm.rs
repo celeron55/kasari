@@ -55,7 +55,7 @@ impl ObjectDetector {
         let r = 0.0145;
         let a_calibrated = accel_g - self.accel_offset;
         let a = a_calibrated * g;
-        let mut omega = sqrtf(fabsf(a));
+        let mut omega = sqrtf(fabsf(a) / r);
         if a < 0.0 {
             omega = -omega;
         }

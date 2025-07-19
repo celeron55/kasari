@@ -73,6 +73,7 @@ pub mod kasari {
 
     pub struct MainLogic {
         pub motor_control_plan: Option<MotorControlPlan>,
+        pub detector: ObjectDetector,
         acceleration_y: f32,
         acceleration_z: f32,
         vbat: f32,
@@ -81,13 +82,13 @@ pub mod kasari {
         control_rotation_speed: f32,
         control_movement_speed: f32,
         control_turning_speed: f32,
-        detector: ObjectDetector,
     }
 
     impl MainLogic {
         pub fn new() -> Self {
             Self {
                 motor_control_plan: None,
+				detector: ObjectDetector::new(),
                 acceleration_y: 0.0,
                 acceleration_z: 0.0,
                 vbat: 0.0,
@@ -96,7 +97,6 @@ pub mod kasari {
 				control_rotation_speed: 0.0,
 				control_movement_speed: 0.0,
 				control_turning_speed: 0.0,
-				detector: ObjectDetector::new(),
             }
         }
 
