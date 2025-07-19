@@ -21,6 +21,7 @@ pub const LOG_LIDAR: bool = false;
 pub const LOG_ALL_LIDAR: bool = false;
 pub const LOG_RECEIVER: bool = false;
 pub const LOG_VBAT: bool = false;
+pub const LOG_DETECTION: bool = false;
 
 pub type EventChannel = PubSubChannel<CriticalSectionRawMutex, kasari::InputEvent, 32, 2, 6>;
 pub static EVENT_CHANNEL: StaticCell<EventChannel> = StaticCell::new();
@@ -46,7 +47,7 @@ pub fn rem_euclid_f32(x: f32, y: f32) -> f32 {
 }
 
 pub mod kasari {
-    use crate::shared::{LOG_RECEIVER, get_current_timestamp};
+    use crate::shared::{LOG_RECEIVER, LOG_DETECTION, get_current_timestamp};
     #[cfg(target_os = "none")]
 	use alloc::vec::Vec;
     #[cfg(not(target_os = "none"))]
@@ -188,16 +189,19 @@ pub mod kasari {
         }
 
         pub fn step(&mut self, publisher: &mut embassy_sync::pubsub::Publisher<CriticalSectionRawMutex, InputEvent, 32, 2, 6>) {
-            let (closest_wall, open_space, object_pos) = self.detector.detect_objects(false);
-            self.latest_closest_wall = closest_wall;
-            self.latest_open_space = open_space;
-            self.latest_object_pos = object_pos;
-            println!("Detected: Wall {:?}, Open {:?}, Object {:?} (bins={})",
-                    closest_wall, open_space, object_pos, self.detector.bin_count());
-
             if let Some(last_ts) = self.detector.last_ts {
                 if last_ts - self.last_planner_ts >= 100_000 {
                     self.last_planner_ts = last_ts;
+
+                    let (closest_wall, open_space, object_pos) = self.detector.detect_objects(false);
+                    self.latest_closest_wall = closest_wall;
+                    self.latest_open_space = open_space;
+                    self.latest_object_pos = object_pos;
+                    if LOG_DETECTION {
+                        println!("Detected: Wall {:?}, Open {:?}, Object {:?} (bins={})",
+                                closest_wall, open_space, object_pos, self.detector.bin_count());
+                    }
+
                     let plan = if let Some(ref p) = self.motor_control_plan {
                         p.clone()
                     } else {
