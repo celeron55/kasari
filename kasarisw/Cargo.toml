@@ -21,9 +21,11 @@ critical-section = "1.2.0"
 embassy-sync = "0.7.0"
 ringbuffer = "0.15.0"
 static_cell = "2.1.0"
+arrayvec = { version = "0.7.4", default-features = false, features = [] }
+num-traits = { version = "0.2.19", default-features = false }
+libm = "0.2.8"
 
 [target.'xtensa-esp32-none-elf'.dependencies]
-arrayvec = { version = "0.7.4", default-features = false, features = [] }
 embassy-executor = { version = "0.7.0", features = ["task-arena-size-32768", "executor-thread", "executor-interrupt"] }
 embassy-futures = "0.1.1"
 embassy-time = "0.4.0"

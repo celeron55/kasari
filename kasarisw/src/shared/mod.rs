@@ -5,18 +5,23 @@ use ringbuffer::ConstGenericRingBuffer;
 use embassy_sync::pubsub::PubSubChannel;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use static_cell::StaticCell;
+use num_traits::ops::euclid::Euclid;
+use num_traits::float::FloatCore;
 
 #[cfg(target_os = "none")]
 use embassy_time::Instant;
 #[cfg(not(target_os = "none"))]
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod algorithm;
+use algorithm::ObjectDetector;
+
 pub const LOG_LIDAR: bool = false;
 pub const LOG_ALL_LIDAR: bool = false;
 pub const LOG_RECEIVER: bool = false;
 pub const LOG_VBAT: bool = false;
 
-pub type EventChannel = PubSubChannel<CriticalSectionRawMutex, kasari::InputEvent, 64, 2, 6>;
+pub type EventChannel = PubSubChannel<CriticalSectionRawMutex, kasari::InputEvent, 32, 2, 6>;
 pub static EVENT_CHANNEL: StaticCell<EventChannel> = StaticCell::new();
 
 pub fn get_current_timestamp() -> u64 {
@@ -30,6 +35,15 @@ pub fn get_current_timestamp() -> u64 {
     }
 }
 
+// We need to define this on our own, because the num-traits one for some reason
+// wants &f32 on ESP32 and f32 on PC
+pub fn rem_euclid_f32(x: f32, y: f32) -> f32 {
+    #[cfg(not(target_os = "none"))]
+    { x.rem_euclid(y) }
+    #[cfg(target_os = "none")]
+    { x.rem_euclid(&y) }
+}
+
 pub mod kasari {
     use crate::shared::{LOG_RECEIVER, get_current_timestamp};
     #[cfg(target_os = "none")]
@@ -38,6 +52,7 @@ pub mod kasari {
     use std::vec::Vec;
     #[cfg(target_os = "none")]
     use esp_println::println;
+	use crate::shared::ObjectDetector;
 
 	#[derive(Clone)]
     pub enum InputEvent {
@@ -65,6 +80,7 @@ pub mod kasari {
         control_rotation_speed: f32,
         control_movement_speed: f32,
         control_turning_speed: f32,
+        detector: ObjectDetector,
     }
 
     impl MainLogic {
@@ -79,10 +95,13 @@ pub mod kasari {
 				control_rotation_speed: 0.0,
 				control_movement_speed: 0.0,
 				control_turning_speed: 0.0,
+				detector: ObjectDetector::new(),
             }
         }
 
         pub fn feed_event(&mut self, event: InputEvent) {
+            self.detector.update(&event);
+
             match event {
                 InputEvent::Lidar(_timestamp, _d1, _d2, _d3, _d4) => {}
                 InputEvent::Accelerometer(_timestamp, a_y, a_z) => {
@@ -153,7 +172,11 @@ pub mod kasari {
             }
         }
 
-        pub fn step(&mut self) {}
+        pub fn step(&mut self) {
+            let (closest_wall, open_space, object_pos) = self.detector.detect_objects(false);
+            println!("Detected: Wall {:?}, Open {:?}, Object {:?} (points.len()={})",
+                    closest_wall, open_space, object_pos, self.detector.points.len());
+        }
     }
 
 	const TAG_XOR: u16 = 0x5555;
