@@ -327,12 +327,12 @@ async fn main(spawner: Spawner) {
             logic.feed_event(event);
         }
 
-        logic.step();
+        logic.step(&mut publisher);
 
         if let Some(ref plan) = logic.motor_control_plan {
             let timestamp = embassy_time::Instant::now().as_ticks();
             if timestamp - plan.timestamp < 2000 {
-                let target_speed_percent = plan.throttle;
+                let target_speed_percent = plan.rotation_speed;
                 let duty = target_speed_to_pwm_duty(target_speed_percent, 2u32.pow(8));
                 if shared::LOG_RECEIVER {
                     esp_println::println!("Setting duty cycle: {:?}", duty);

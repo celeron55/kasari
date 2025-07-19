@@ -54,6 +54,7 @@ pub mod kasari {
     #[cfg(target_os = "none")]
     use esp_println::println;
 	use crate::shared::ObjectDetector;
+    use crate::shared::CriticalSectionRawMutex;
 
 	#[derive(Clone)]
     pub enum InputEvent {
@@ -62,13 +63,15 @@ pub mod kasari {
         Receiver(u64, u8, Option<f32>), // timestamp, channel (0=throttle), pulse length (us)
         Vbat(u64, f32),                 // timestamp, battery voltage (V)
         WifiControl(u64, u8, f32, f32, f32),// timestamp, mode, rotation speed, movement speed, turning speed
+        Planner(MotorControlPlan, (f32, f32), (f32, f32), (f32, f32), f32),
     }
 
+    #[derive(Clone)]
     pub struct MotorControlPlan {
 		pub timestamp: u64,
-        pub throttle: f32,             // -1.0...1.0
-        pub modulation_amplitude: f32, // -0.0....1.0
-        pub modulation_phase: f32,     // Some kind of an angle
+        pub rotation_speed: f32,
+        pub movement_x: f32,
+        pub movement_y: f32,
     }
 
     pub struct MainLogic {
@@ -82,6 +85,10 @@ pub mod kasari {
         control_rotation_speed: f32,
         control_movement_speed: f32,
         control_turning_speed: f32,
+        pub latest_closest_wall: (f32, f32),
+        pub latest_open_space: (f32, f32),
+        pub latest_object_pos: (f32, f32),
+        last_planner_ts: u64,
     }
 
     impl MainLogic {
@@ -97,6 +104,10 @@ pub mod kasari {
 				control_rotation_speed: 0.0,
 				control_movement_speed: 0.0,
 				control_turning_speed: 0.0,
+                latest_closest_wall: (0.0, 0.0),
+                latest_open_space: (0.0, 0.0),
+                latest_object_pos: (0.0, 0.0),
+                last_planner_ts: 0,
             }
         }
 
@@ -131,9 +142,9 @@ pub mod kasari {
                             }
                             self.motor_control_plan = Some(MotorControlPlan {
 								timestamp: timestamp,
-                                throttle: target_speed_percent,
-                                modulation_amplitude: 0.0,
-                                modulation_phase: 0.0,
+                                rotation_speed: target_speed_percent,
+                                movement_x: 0.0,
+                                movement_y: 0.0,
                             });
                         }
                         None => {
@@ -166,19 +177,48 @@ pub mod kasari {
 						let timestamp = get_current_timestamp();
 						self.motor_control_plan = Some(MotorControlPlan {
 							timestamp: timestamp,
-							throttle: self.control_rotation_speed,
-							modulation_amplitude: 0.0,
-							modulation_phase: 0.0,
+							rotation_speed: self.control_rotation_speed,
+                            movement_x: 0.0,
+                            movement_y: 0.0,
 						});
 					}
 				}
+                InputEvent::Planner(..) => {}
             }
         }
 
-        pub fn step(&mut self) {
+        pub fn step(&mut self, publisher: &mut embassy_sync::pubsub::Publisher<CriticalSectionRawMutex, InputEvent, 32, 2, 6>) {
             let (closest_wall, open_space, object_pos) = self.detector.detect_objects(false);
+            self.latest_closest_wall = closest_wall;
+            self.latest_open_space = open_space;
+            self.latest_object_pos = object_pos;
             println!("Detected: Wall {:?}, Open {:?}, Object {:?} (bins={})",
                     closest_wall, open_space, object_pos, self.detector.bin_count());
+
+            if let Some(last_ts) = self.detector.last_ts {
+                if last_ts - self.last_planner_ts >= 100_000 {
+                    self.last_planner_ts = last_ts;
+                    let plan = if let Some(ref p) = self.motor_control_plan {
+                        p.clone()
+                    } else {
+                        MotorControlPlan {
+                            timestamp: last_ts,
+                            rotation_speed: 0.0,
+                            movement_x: 0.0,
+                            movement_y: 0.0,
+                        }
+                    };
+                    publisher.publish_immediate(
+                        InputEvent::Planner(
+                            plan,
+                            closest_wall,
+                            open_space,
+                            object_pos,
+                            self.detector.theta,
+                        )
+                    );
+                }
+            }
         }
     }
 
@@ -232,6 +272,21 @@ pub mod kasari {
 				buf.extend_from_slice(&r.to_le_bytes());
 				buf.extend_from_slice(&m.to_le_bytes());
 				buf.extend_from_slice(&t.to_le_bytes());
+			}
+            InputEvent::Planner(plan, cw, os, op, theta) => {
+				let tag = (5u16 ^ TAG_XOR).to_le_bytes();
+				buf.extend_from_slice(&tag);
+				buf.extend_from_slice(&plan.timestamp.to_le_bytes());
+				buf.extend_from_slice(&plan.rotation_speed.to_le_bytes());
+				buf.extend_from_slice(&plan.movement_x.to_le_bytes());
+				buf.extend_from_slice(&plan.movement_y.to_le_bytes());
+				buf.extend_from_slice(&cw.0.to_le_bytes());
+				buf.extend_from_slice(&cw.1.to_le_bytes());
+				buf.extend_from_slice(&os.0.to_le_bytes());
+				buf.extend_from_slice(&os.1.to_le_bytes());
+				buf.extend_from_slice(&op.0.to_le_bytes());
+				buf.extend_from_slice(&op.1.to_le_bytes());
+                buf.extend_from_slice(&theta.to_le_bytes());
 			}
 		}
 		buf
