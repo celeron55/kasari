@@ -294,25 +294,8 @@ async fn main(spawner: Spawner) {
     spawner.spawn(connection_task(controller)).ok();
     spawner.spawn(net_task(ap_runner)).ok();
     spawner.spawn(net_task(sta_runner)).ok();
-
-    let sta_address = loop {
-        if let Some(config) = sta_stack.config_v4() {
-            let address = config.address.address();
-            println!("Got IP: {}", address);
-            break address;
-        }
-        println!("Waiting for IP...");
-        Timer::after(Duration::from_millis(500)).await;
-    };
-    loop {
-        if ap_stack.is_link_up() {
-            break;
-        }
-        Timer::after(Duration::from_millis(500)).await;
-    }
-    println!("Connect to the AP `esp-wifi` and connect to TCP 192.168.2.1:8080");
-    println!("Or connect to the ap `{SSID}` and connect to TCP {sta_address}:8080");
-
+    spawner.spawn(print_ap_link_task(ap_stack)).ok();
+    spawner.spawn(print_sta_ip_task(sta_stack, SSID)).ok();
     spawner.spawn(listener_task(ap_stack, sta_stack, event_channel)).ok();
 
     // Main loop
@@ -475,6 +458,32 @@ async fn connection_task(mut controller: WifiController<'static>) {
 #[embassy_executor::task(pool_size = 2)]
 async fn net_task(mut runner: Runner<'static, WifiDevice<'static>>) {
     runner.run().await
+}
+
+#[embassy_executor::task]
+async fn print_ap_link_task(ap_stack: embassy_net::Stack<'static>) {
+    loop {
+        if ap_stack.is_link_up() {
+            println!("Connect to the AP `kasarisw` and connect to TCP 192.168.2.1:8080");
+            break;
+        }
+        Timer::after(Duration::from_millis(500)).await;
+    }
+}
+
+#[embassy_executor::task]
+async fn print_sta_ip_task(sta_stack: embassy_net::Stack<'static>, ssid: &'static str) {
+    let mut sta_address = None;
+    loop {
+        if let Some(config) = sta_stack.config_v4() {
+            sta_address = Some(config.address.address());
+            println!("Got IP: {}", sta_address.unwrap());
+            println!("Or connect to the ap `{ssid}` and connect to TCP {}:8080", sta_address.unwrap());
+            break;
+        }
+        println!("Waiting for IP...");
+        Timer::after(Duration::from_millis(500)).await;
+    }
 }
 
 use crate::shared::EventChannel;
