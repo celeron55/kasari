@@ -244,18 +244,30 @@ impl eframe::App for MyApp {
         }
 
         self.show_planner_theta = false;
+        let mut processed_events = false;
 
         if self.mode == "step" {
             if self.step_requested {
                 self.step_requested = false;
                 let mut found_lidar = false;
                 while self.current_event_idx < self.events.len() && !found_lidar {
+                    processed_events = true;
                     let event = self.events[self.current_event_idx].clone();
                     self.logic.feed_event(event.clone());
+                    if self.debug {
+                        match &event {
+                            InputEvent::Lidar(ts, d1, d2, d3, d4) => println!("Processed Lidar ts={} d=({:.0},{:.0},{:.0},{:.0}) theta={:.4} rpm={:.2}", *ts, *d1, *d2, *d3, *d4, self.logic.detector.theta, self.logic.detector.rpm),
+                            InputEvent::Accelerometer(ts, ay, az) => println!("Processed Accel ts={} ay={:.2} az={:.2} theta={:.4} rpm={:.2}", *ts, *ay, *az, self.logic.detector.theta, self.logic.detector.rpm),
+                        _ => {},
+                        }
+                    }
                     if let InputEvent::Planner(plan, cw, os, op, theta) = &event {
                         self.theta_offset = self.logic.detector.theta - *theta;
                         self.latest_planner = Some((*plan, *cw, *os, *op, *theta));
                         self.show_planner_theta = true;
+                        if self.debug {
+                            println!("Processed Planner ts={} theta={:.4} rpm={:.2} (sim_theta_at_this_moment={:.4})", plan.timestamp, *theta, self.logic.detector.rpm, self.logic.detector.theta);
+                        }
                     }
                     if matches!(&event, InputEvent::Lidar(..)) {
                         found_lidar = true;
@@ -274,12 +286,23 @@ impl eframe::App for MyApp {
             while self.current_event_idx < self.events.len()
                 && get_ts(&self.events[self.current_event_idx]) as f64 <= current_sim_ts
             {
+                processed_events = true;
                 let event = self.events[self.current_event_idx].clone();
                 self.logic.feed_event(event.clone());
+                if self.debug {
+                    match &event {
+                        InputEvent::Lidar(ts, d1, d2, d3, d4) => println!("Processed Lidar ts={} d=({:.0},{:.0},{:.0},{:.0}) theta={:.4} rpm={:.2}", *ts, *d1, *d2, *d3, *d4, self.logic.detector.theta, self.logic.detector.rpm),
+                        InputEvent::Accelerometer(ts, ay, az) => println!("Processed Accel ts={} ay={:.2} az={:.2} theta={:.4} rpm={:.2}", *ts, *ay, *az, self.logic.detector.theta, self.logic.detector.rpm),
+                    _ => {},
+                    }
+                }
                 if let InputEvent::Planner(plan, cw, os, op, theta) = &event {
                     self.theta_offset = self.logic.detector.theta - *theta;
                     self.latest_planner = Some((*plan, *cw, *os, *op, *theta));
                     self.show_planner_theta = true;
+                    if self.debug {
+                        println!("Processed Planner ts={} theta={:.4} rpm={:.2} (sim_theta_at_this_moment={:.4})", plan.timestamp, *theta, self.logic.detector.rpm, self.logic.detector.theta);
+                    }
                 }
                 if matches!(&event, InputEvent::Lidar(..)) {
                     self.current_lidar_points = self.logic.detector.last_xys.to_vec();
@@ -289,6 +312,16 @@ impl eframe::App for MyApp {
         }
 
         let (closest_wall, open_space, object_pos) = self.logic.detector.detect_objects(self.debug);
+
+        if self.debug && processed_events {
+            println!("Simulator: ts={} theta={:.4} rpm={:.2} cw=({:.1},{:.1}) os=({:.1},{:.1}) op=({:.1},{:.1})",
+                self.logic.detector.last_ts.unwrap_or(0),
+                self.logic.detector.theta,
+                self.logic.detector.rpm,
+                closest_wall.0, closest_wall.1,
+                open_space.0, open_space.1,
+                object_pos.0, object_pos.1);
+        }
 
         let target_rpm = self.latest_planner.as_ref().map_or(0.0, |p| p.0.rotation_speed);
 
