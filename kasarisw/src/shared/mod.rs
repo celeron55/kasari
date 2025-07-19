@@ -14,7 +14,7 @@ use embassy_time::Instant;
 #[cfg(not(target_os = "none"))]
 use std::time::{SystemTime, UNIX_EPOCH};
 
-mod algorithm;
+pub mod algorithm;
 use algorithm::ObjectDetector;
 
 pub const LOG_LIDAR: bool = false;
@@ -177,8 +177,8 @@ pub mod kasari {
 
         pub fn step(&mut self) {
             let (closest_wall, open_space, object_pos) = self.detector.detect_objects(false);
-            println!("Detected: Wall {:?}, Open {:?}, Object {:?} (points.len()={})",
-                    closest_wall, open_space, object_pos, self.detector.points.len());
+            println!("Detected: Wall {:?}, Open {:?}, Object {:?} (bins={})",
+                    closest_wall, open_space, object_pos, self.detector.bin_count());
         }
     }
 

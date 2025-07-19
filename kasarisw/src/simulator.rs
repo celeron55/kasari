@@ -11,6 +11,7 @@ use serde_json::Value;
 
 mod shared;
 use shared::kasari::{InputEvent, MainLogic};
+use shared::algorithm::{NUM_BINS, BIN_ANGLE_STEP};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -203,16 +204,10 @@ impl eframe::App for MyApp {
                 let mut found_lidar = false;
                 while self.current_event_idx < self.events.len() && !found_lidar {
                     let event = self.events[self.current_event_idx].clone();
-                    let old_len = self.logic.detector.points.len();
                     self.logic.feed_event(event.clone());
                     if matches!(event, InputEvent::Lidar(..)) {
                         found_lidar = true;
-                        let current_ts = get_ts(&event);
-                        self.current_lidar_points = self.logic.detector.points
-                            .iter()
-                            .filter(|pt| pt.2 == current_ts)
-                            .map(|&(x, y, _)| (x, y))
-                            .collect();
+                        self.current_lidar_points = self.logic.detector.last_xys.to_vec();
                     }
                     self.current_event_idx += 1;
                 }
@@ -228,15 +223,9 @@ impl eframe::App for MyApp {
                 && get_ts(&self.events[self.current_event_idx]) as f64 <= current_sim_ts
             {
                 let event = self.events[self.current_event_idx].clone();
-                let old_len = self.logic.detector.points.len();
                 self.logic.feed_event(event.clone());
                 if matches!(event, InputEvent::Lidar(..)) {
-                    let current_ts = get_ts(&event);
-                    self.current_lidar_points = self.logic.detector.points
-                        .iter()
-                        .filter(|pt| pt.2 == current_ts)
-                        .map(|&(x, y, _)| (x, y))
-                        .collect();
+                    self.current_lidar_points = self.logic.detector.last_xys.to_vec();
                 }
                 self.current_event_idx += 1;
             }
@@ -267,10 +256,15 @@ impl eframe::App for MyApp {
             plot.show(ui, |plot_ui| {
                 plot_ui.set_plot_bounds(PlotBounds::from_min_max([-800., -800.], [800., 800.]));
 
-                let points: Vec<[f64; 2]> = self.logic.detector.points
-                    .iter()
-                    .map(|&(x, y, _)| [x as f64, y as f64])
-                    .collect();
+                let points: Vec<[f64; 2]> = (0..NUM_BINS).filter_map(|i| {
+                    let d = self.logic.detector.bins_dist[i];
+                    if d.is_finite() {
+                        let angle = i as f32 * BIN_ANGLE_STEP;
+                        Some([(d * angle.cos()) as f64, (d * angle.sin()) as f64])
+                    } else {
+                        None
+                    }
+                }).collect();
                 plot_ui.points(
                     egui_plot::Points::new(points)
                         .color(egui::Color32::BLUE)
