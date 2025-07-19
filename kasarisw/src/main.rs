@@ -595,11 +595,15 @@ async fn listener_task(
                             // Assuming tag 4 for WifiControl
                             if rx_pos >= 1 + 8 + 1 + 4 + 4 + 4 {
                                 // u8 tag + u64 ts + u8 mode + 3*f32
-                                let ts = u64::from_le_bytes(rx_buffer[1..9].try_into().unwrap());
+                                let _ts_orig = u64::from_le_bytes(rx_buffer[1..9].try_into().unwrap());
                                 let mode = rx_buffer[9];
                                 let r = f32::from_le_bytes(rx_buffer[10..14].try_into().unwrap());
                                 let m = f32::from_le_bytes(rx_buffer[14..18].try_into().unwrap());
                                 let t = f32::from_le_bytes(rx_buffer[18..22].try_into().unwrap());
+                                // Use local timestamp in order to make all
+                                // event log timestamps have the same local
+                                // timebase
+                                let ts = embassy_time::Instant::now().as_ticks();
                                 publisher.publish_immediate(
                                     shared::kasari::InputEvent::WifiControl(ts, mode, r, m, t),
                                 );
