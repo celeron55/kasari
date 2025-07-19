@@ -331,19 +331,25 @@ async fn main(spawner: Spawner) {
 
         if let Some(ref plan) = logic.motor_control_plan {
             let timestamp = embassy_time::Instant::now().as_ticks();
-            if timestamp - plan.timestamp < 2000 {
+            if timestamp - plan.timestamp < 500_000 {
                 let target_speed_percent = plan.rotation_speed;
                 let duty = target_speed_to_pwm_duty(target_speed_percent, 2u32.pow(8));
-                if shared::LOG_RECEIVER {
-                    esp_println::println!("Setting duty cycle: {:?}", duty);
+                if shared::LOG_MOTOR_CONTROL {
+                    esp_println::println!("Setting motor duty cycle: {:?}", duty);
                 }
                 _ = channel0.set_duty_hw(duty);
                 _ = channel1.set_duty_hw(duty);
             } else {
+                if shared::LOG_MOTOR_CONTROL {
+                    esp_println::println!("Setting motor duty cycle: OFF (timeout)");
+                }
                 _ = channel0.set_duty(0);
                 _ = channel1.set_duty(0);
             }
         } else {
+            if shared::LOG_MOTOR_CONTROL {
+                esp_println::println!("Setting motor duty cycle: OFF (intentional)");
+            }
             _ = channel0.set_duty(0);
             _ = channel1.set_duty(0);
         }
