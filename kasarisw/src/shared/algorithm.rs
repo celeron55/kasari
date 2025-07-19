@@ -1,14 +1,6 @@
 // algorithm.rs
 #![no_std]
 
-#[cfg(target_os = "none")]
-use alloc::vec;
-#[cfg(target_os = "none")]
-use alloc::vec::Vec;
-#[cfg(not(target_os = "none"))]
-use std::vec;
-#[cfg(not(target_os = "none"))]
-use std::vec::Vec;
 use arrayvec::ArrayVec;
 use core::cmp::Ordering;
 use core::f32::consts::PI;
