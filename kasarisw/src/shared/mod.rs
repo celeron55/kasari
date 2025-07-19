@@ -62,9 +62,9 @@ pub mod kasari {
     use alloc::vec::Vec;
     #[cfg(target_os = "none")]
     use esp_println::println;
+    use libm::{fabsf, sqrtf};
     #[cfg(not(target_os = "none"))]
     use std::vec::Vec;
-    use libm::{fabsf, sqrtf};
 
     #[derive(Clone, Debug)]
     pub enum InputEvent {
@@ -148,6 +148,7 @@ pub mod kasari {
                     if self.control_mode != 0 {
                         return;
                     }
+                    self.autonomous_enabled = false;
                     if !self.vbat_ok {
                         self.motor_control_plan = None;
                         return;
@@ -214,13 +215,9 @@ pub mod kasari {
 
         pub fn step(
             &mut self,
-            publisher: Option<&mut embassy_sync::pubsub::Publisher<
-                CriticalSectionRawMutex,
-                InputEvent,
-                32,
-                2,
-                6,
-            >>,
+            publisher: Option<
+                &mut embassy_sync::pubsub::Publisher<CriticalSectionRawMutex, InputEvent, 32, 2, 6>,
+            >,
         ) {
             if self.autonomous_enabled {
                 let ts = get_current_timestamp();

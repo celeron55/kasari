@@ -1,12 +1,11 @@
 use std::error::Error;
 use std::fs::File;
-use std::io::{self, BufRead, BufReader};
-use std::path::Path;
+use std::io::{self, BufRead, BufReader, Error as IoError};
 use std::time::Instant;
 
 use clap::Parser;
 use eframe::egui;
-use egui_plot::{Line, Plot, PlotBounds, PlotPoint, PlotPoints};
+use egui_plot::{Line, Plot, PlotBounds, PlotPoints};
 use serde_json::Value;
 
 mod shared;
@@ -22,40 +21,22 @@ struct Args {
     /// Enable debug prints
     #[arg(long)]
     debug: bool,
+
+    /// Remove all WifiControl events and inject new ones with mode=2 every 100ms starting after first Lidar event
+    #[arg(long)]
+    inject_autonomous: bool,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
 
-    let mut events: Vec<InputEvent> = Vec::new();
-
-    let lines: Box<dyn Iterator<Item = String>> = if args.source == "-" {
-        Box::new(io::stdin().lines().filter_map(Result::ok))
+    let lines: Box<dyn Iterator<Item = Result<String, IoError>>> = if args.source == "-" {
+        Box::new(io::stdin().lines())
     } else {
         let file = File::open(&args.source)?;
         let reader = BufReader::new(file);
-        Box::new(reader.lines().filter_map(Result::ok))
+        Box::new(reader.lines())
     };
-
-    for line in lines {
-        if line.trim().is_empty() {
-            continue;
-        }
-        match parse_event(&line) {
-            Ok(event) => events.push(event),
-            Err(e) => {
-                eprintln!("Skipping invalid line: {} (error: {})", line.trim(), e);
-                continue;
-            }
-        }
-    }
-
-    if events.is_empty() {
-        eprintln!("No events to process.");
-        return Ok(());
-    }
-
-    events.sort_by_key(|e| get_ts(e));
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size([2000.0, 2000.0]),
@@ -65,7 +46,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     eframe::run_native(
         "Robot Simulator",
         options,
-        Box::new(move |_cc| Ok(Box::new(MyApp::new(events, args.debug)))),
+        Box::new(move |_cc| {
+            Ok(Box::new(MyApp::new(
+                lines,
+                args.debug,
+                args.inject_autonomous,
+            )))
+        }),
     )?;
 
     Ok(())
@@ -180,8 +167,9 @@ fn get_ts(event: &InputEvent) -> u64 {
 
 struct MyApp {
     logic: MainLogic,
-    events: Vec<InputEvent>,
-    current_event_idx: usize,
+    lines: Box<dyn Iterator<Item = Result<String, IoError>>>,
+    next_real_event: Option<InputEvent>,
+    current_event_idx: usize, // For display purposes, count processed
     virtual_elapsed: f64,
     first_ts: u64,
     mode: String,
@@ -192,21 +180,25 @@ struct MyApp {
     latest_planner: Option<InputEvent>,
     show_planner_theta: bool,
     theta_offset: f32,
+    inject_autonomous: bool,
+    first_lidar_found: bool,
+    next_inject_ts: Option<u64>,
+    last_read_ts: Option<u64>,
 }
 
 impl MyApp {
-    fn new(events: Vec<InputEvent>, debug: bool) -> Self {
-        let first_ts = if events.is_empty() {
-            0
-        } else {
-            get_ts(&events[0])
-        };
+    fn new(
+        lines: Box<dyn Iterator<Item = Result<String, IoError>>>,
+        debug: bool,
+        inject_autonomous: bool,
+    ) -> Self {
         Self {
             logic: MainLogic::new(),
-            events,
+            lines,
+            next_real_event: None,
             current_event_idx: 0,
             virtual_elapsed: 0.0,
-            first_ts,
+            first_ts: 0,
             mode: "play".to_string(),
             step_requested: false,
             last_real: Instant::now(),
@@ -215,11 +207,16 @@ impl MyApp {
             latest_planner: None,
             show_planner_theta: false,
             theta_offset: 0.0,
+            inject_autonomous,
+            first_lidar_found: false,
+            next_inject_ts: None,
+            last_read_ts: None,
         }
     }
 
     fn reset(&mut self) {
         self.logic = MainLogic::new();
+        self.next_real_event = None;
         self.current_event_idx = 0;
         self.virtual_elapsed = 0.0;
         self.mode = "play".to_string();
@@ -228,6 +225,10 @@ impl MyApp {
         self.latest_planner = None;
         self.show_planner_theta = false;
         self.theta_offset = 0.0;
+        self.first_lidar_found = false;
+        self.next_inject_ts = None;
+        self.last_read_ts = None;
+        // Note: lines cannot be reset unless reopen file, but assume no reset for streaming
     }
 
     fn rotate_point(&self, x: f32, y: f32, angle: f32) -> (f64, f64) {
@@ -238,7 +239,92 @@ impl MyApp {
         (new_x as f64, new_y as f64)
     }
 
+    fn read_next_real(&mut self) -> bool {
+        loop {
+            if let Some(line_res) = self.lines.next() {
+                match line_res {
+                    Ok(line) => {
+                        if line.trim().is_empty() {
+                            continue;
+                        }
+                        match parse_event(&line) {
+                            Ok(mut event) => {
+                                if self.inject_autonomous
+                                    && matches!(&event, InputEvent::WifiControl(..))
+                                {
+                                    continue;
+                                }
+                                let mut adjusted_ts = get_ts(&event);
+                                if matches!(&event, InputEvent::WifiControl(..)) {
+                                    if let Some(last) = self.last_read_ts {
+                                        if ((adjusted_ts as i128 - last as i128).abs() > 5_000_000)
+                                        {
+                                            adjusted_ts = last + 1000;
+                                        }
+                                    }
+                                }
+                                // Update event ts
+                                match event {
+                                    InputEvent::Lidar(_, d1, d2, d3, d4) => {
+                                        event = InputEvent::Lidar(adjusted_ts, d1, d2, d3, d4)
+                                    }
+                                    InputEvent::Accelerometer(_, ay, az) => {
+                                        event = InputEvent::Accelerometer(adjusted_ts, ay, az)
+                                    }
+                                    InputEvent::Receiver(_, ch, pulse) => {
+                                        event = InputEvent::Receiver(adjusted_ts, ch, pulse)
+                                    }
+                                    InputEvent::Vbat(_, voltage) => {
+                                        event = InputEvent::Vbat(adjusted_ts, voltage)
+                                    }
+                                    InputEvent::WifiControl(_, mode, r, m, t) => {
+                                        event = InputEvent::WifiControl(adjusted_ts, mode, r, m, t)
+                                    }
+                                    InputEvent::Planner(_, plan, cw, os, op, theta, rpm) => {
+                                        event = InputEvent::Planner(
+                                            adjusted_ts,
+                                            plan,
+                                            cw,
+                                            os,
+                                            op,
+                                            theta,
+                                            rpm,
+                                        )
+                                    }
+                                };
+                                self.last_read_ts = Some(adjusted_ts);
+                                if !self.first_lidar_found
+                                    && matches!(&event, InputEvent::Lidar(..))
+                                {
+                                    self.first_lidar_found = true;
+                                    if self.inject_autonomous {
+                                        self.next_inject_ts = Some(adjusted_ts + 100_000);
+                                    }
+                                }
+                                self.next_real_event = Some(event);
+                                return true;
+                            }
+                            Err(e) => {
+                                eprintln!("Skipping invalid line: {} (error: {})", line.trim(), e);
+                                continue;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Error reading line: {}", e);
+                        return false;
+                    }
+                }
+            } else {
+                return false;
+            }
+        }
+    }
+
     fn process_event(&mut self, event: &InputEvent) {
+        if self.first_ts == 0 {
+            self.first_ts = get_ts(event);
+        }
         let cloned_event = event.clone();
         self.logic.feed_event(cloned_event);
         if self.debug {
@@ -265,6 +351,7 @@ impl MyApp {
         if matches!(event, InputEvent::Lidar(..)) {
             self.current_lidar_points = self.logic.detector.last_xys.to_vec();
         }
+        self.current_event_idx += 1;
     }
 }
 
@@ -286,34 +373,109 @@ impl eframe::App for MyApp {
         self.show_planner_theta = false;
         let mut processed_events = false;
 
+        // If first_ts == 0, read the first event and set first_ts
+        if self.first_ts == 0 {
+            if self.next_real_event.is_none() {
+                if self.read_next_real() {
+                    if let Some(event) = &self.next_real_event {
+                        self.first_ts = get_ts(event);
+                    }
+                }
+            }
+        }
+
         if self.mode == "step" {
             if self.step_requested {
                 self.step_requested = false;
                 let mut found_lidar = false;
-                while self.current_event_idx < self.events.len() && !found_lidar {
-                    processed_events = true;
-                    let event = self.events[self.current_event_idx].clone();
-                    self.process_event(&event);
-                    if matches!(&event, InputEvent::Lidar(..)) {
-                        found_lidar = true;
+                while !found_lidar {
+                    // Load next real if needed
+                    if self.next_real_event.is_none() {
+                        if !self.read_next_real() {
+                            break;
+                        }
                     }
-                    self.current_event_idx += 1;
+
+                    let next_real_ts = self.next_real_event.as_ref().map(get_ts);
+                    let next_inj_ts = self.next_inject_ts;
+
+                    let next_ts_opt = match (next_real_ts, next_inj_ts) {
+                        (None, None) => None,
+                        (Some(rt), None) => Some(rt),
+                        (None, Some(it)) => Some(it),
+                        (Some(rt), Some(it)) => Some(rt.min(it)),
+                    };
+
+                    if let Some(next_ts) = next_ts_opt {
+                        // For step, process until Lidar, regardless of ts
+                        let is_inject_next = next_inj_ts
+                            .map_or(false, |it| next_real_ts.map_or(true, |rt| it <= rt));
+
+                        let event = if is_inject_next {
+                            let ts = next_inj_ts.unwrap();
+                            self.next_inject_ts = Some(ts + 100_000);
+                            InputEvent::WifiControl(ts, 2, 0.0, 0.0, 0.0)
+                        } else {
+                            self.next_real_event.take().unwrap()
+                        };
+
+                        self.process_event(&event);
+                        processed_events = true;
+                        if matches!(&event, InputEvent::Lidar(..)) {
+                            found_lidar = true;
+                        }
+                    } else {
+                        break;
+                    }
                 }
-                if self.current_event_idx > 0 {
-                    let last_ts = get_ts(&self.events[self.current_event_idx - 1]);
+                // Update virtual_elapsed based on last processed ts
+                if let Some(last_ts) = self.logic.detector.last_ts {
                     self.virtual_elapsed = (last_ts - self.first_ts) as f64 / 1_000_000.0;
                 }
             }
         } else {
             self.virtual_elapsed += delta_real * speed;
             let current_sim_ts = self.first_ts as f64 + self.virtual_elapsed * 1_000_000.0;
-            while self.current_event_idx < self.events.len()
-                && get_ts(&self.events[self.current_event_idx]) as f64 <= current_sim_ts
-            {
-                processed_events = true;
-                let event = self.events[self.current_event_idx].clone();
-                self.process_event(&event);
-                self.current_event_idx += 1;
+
+            loop {
+                // Load next real if needed
+                if self.next_real_event.is_none() {
+                    if !self.read_next_real() {
+                        break;
+                    }
+                }
+
+                let next_real_ts = self.next_real_event.as_ref().map(get_ts);
+                let next_inj_ts = self.next_inject_ts;
+
+                let next_ts_opt = match (next_real_ts, next_inj_ts) {
+                    (None, None) => None,
+                    (Some(rt), None) => Some(rt),
+                    (None, Some(it)) => Some(it),
+                    (Some(rt), Some(it)) => Some(rt.min(it)),
+                };
+
+                if let Some(next_ts) = next_ts_opt {
+                    if next_ts as f64 > current_sim_ts {
+                        break;
+                    }
+
+                    let is_inject_next =
+                        next_inj_ts.map_or(false, |it| next_real_ts.map_or(true, |rt| it <= rt));
+
+                    let event = if is_inject_next {
+                        let ts = next_inj_ts.unwrap();
+                        self.next_inject_ts = Some(ts + 100_000);
+                        InputEvent::WifiControl(ts, 2, 0.0, 0.0, 0.0)
+                    } else {
+                        self.next_real_event.take().unwrap()
+                    };
+
+                    self.process_event(&event);
+                    processed_events = true;
+                } else {
+                    break;
+                }
             }
         }
 
@@ -440,7 +602,6 @@ impl eframe::App for MyApp {
 
                 // Visualize simulated MotorControlPlan movement vector
                 if let Some(plan) = &self.logic.motor_control_plan {
-                //{let plan = MotorControlPlan { timestamp: 0, movement_x: 1.0, movement_y: 0.0, rotation_speed: 0.0, };
                     let speed = (plan.movement_x.powi(2) + plan.movement_y.powi(2)).sqrt();
                     if speed > 0.0 {
                         let vis_length = 200.0 * speed as f64;
