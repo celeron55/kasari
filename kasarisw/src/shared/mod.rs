@@ -228,7 +228,7 @@ pub mod kasari {
             let mut movement_x = 0.0;
             let mut movement_y = 0.0;
 
-            if fabsf(self.detector.rpm) >= 800.0 {
+            if fabsf(self.detector.rpm) >= 550.0 {
                 let wall_x = self.latest_closest_wall.0;
                 let wall_y = self.latest_closest_wall.1;
                 let wall_dist = sqrtf(wall_x * wall_x + wall_y * wall_y);
