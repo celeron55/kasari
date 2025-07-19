@@ -213,59 +213,59 @@ pub mod kasari {
             }
         }
 
+        pub fn autonomous_update(&mut self) {
+            let ts = get_current_timestamp();
+            if self.autonomous_start_ts.is_none() {
+                self.autonomous_start_ts = Some(ts);
+            }
+            let ramp_time = (ts - self.autonomous_start_ts.unwrap()) as f32 / 1_000_000.0;
+            let rotation_speed = 20.0 * (ramp_time / 2.0).min(1.0);
+
+            let mut movement_x = 0.0;
+            let mut movement_y = 0.0;
+
+            if fabsf(self.detector.rpm) >= 800.0 {
+                let wall_x = self.latest_closest_wall.0;
+                let wall_y = self.latest_closest_wall.1;
+                let wall_dist = sqrtf(wall_x * wall_x + wall_y * wall_y);
+
+                if wall_dist > 0.0 && wall_dist < 200.0 {
+                    let away_x = -wall_x;
+                    let away_y = -wall_y;
+                    let target_x = (away_x + self.latest_open_space.0) / 2.0;
+                    let target_y = (away_y + self.latest_open_space.1) / 2.0;
+                    let target_len = sqrtf(target_x * target_x + target_y * target_y);
+                    if target_len > 0.0 {
+                        movement_x = target_x / target_len * 1.0;
+                        movement_y = target_y / target_len * 1.0;
+                    }
+                } else {
+                    let obj_x = self.latest_object_pos.0;
+                    let obj_y = self.latest_object_pos.1;
+                    if obj_x != 100.0 || obj_y != 100.0 {
+                        let obj_dist = sqrtf(obj_x * obj_x + obj_y * obj_y);
+                        if obj_dist > 0.0 {
+                            movement_x = obj_x / obj_dist * 1.5;
+                            movement_y = obj_y / obj_dist * 1.5;
+                        }
+                    }
+                }
+            }
+
+            self.motor_control_plan = Some(MotorControlPlan {
+                timestamp: ts,
+                rotation_speed,
+                movement_x,
+                movement_y,
+            });
+        }
+
         pub fn step(
             &mut self,
             publisher: Option<
                 &mut embassy_sync::pubsub::Publisher<CriticalSectionRawMutex, InputEvent, 32, 2, 6>,
             >,
         ) {
-            if self.autonomous_enabled {
-                let ts = get_current_timestamp();
-                if self.autonomous_start_ts.is_none() {
-                    self.autonomous_start_ts = Some(ts);
-                }
-                let ramp_time = (ts - self.autonomous_start_ts.unwrap()) as f32 / 1_000_000.0;
-                let rotation_speed = 20.0 * (ramp_time / 2.0).min(1.0);
-
-                let mut movement_x = 0.0;
-                let mut movement_y = 0.0;
-
-                if fabsf(self.detector.rpm) >= 800.0 {
-                    let wall_x = self.latest_closest_wall.0;
-                    let wall_y = self.latest_closest_wall.1;
-                    let wall_dist = sqrtf(wall_x * wall_x + wall_y * wall_y);
-
-                    if wall_dist > 0.0 && wall_dist < 200.0 {
-                        let away_x = -wall_x;
-                        let away_y = -wall_y;
-                        let target_x = (away_x + self.latest_open_space.0) / 2.0;
-                        let target_y = (away_y + self.latest_open_space.1) / 2.0;
-                        let target_len = sqrtf(target_x * target_x + target_y * target_y);
-                        if target_len > 0.0 {
-                            movement_x = target_x / target_len * 1.0;
-                            movement_y = target_y / target_len * 1.0;
-                        }
-                    } else {
-                        let obj_x = self.latest_object_pos.0;
-                        let obj_y = self.latest_object_pos.1;
-                        if obj_x != 100.0 || obj_y != 100.0 {
-                            let obj_dist = sqrtf(obj_x * obj_x + obj_y * obj_y);
-                            if obj_dist > 0.0 {
-                                movement_x = obj_x / obj_dist * 1.5;
-                                movement_y = obj_y / obj_dist * 1.5;
-                            }
-                        }
-                    }
-                }
-
-                self.motor_control_plan = Some(MotorControlPlan {
-                    timestamp: ts,
-                    rotation_speed,
-                    movement_x,
-                    movement_y,
-                });
-            }
-
             if let Some(last_ts) = self.detector.last_ts {
                 if last_ts - self.last_planner_ts >= 100_000 {
                     self.last_planner_ts = last_ts;
@@ -283,6 +283,10 @@ pub mod kasari {
                             object_pos,
                             self.detector.bin_count()
                         );
+                    }
+
+                    if self.autonomous_enabled {
+                        self.autonomous_update();
                     }
 
                     let plan = if let Some(ref p) = self.motor_control_plan {
