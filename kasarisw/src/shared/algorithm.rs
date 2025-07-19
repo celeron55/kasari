@@ -18,6 +18,10 @@ use crate::shared::rem_euclid_f32;
 const MAX_POINTS_CAP: usize = 256;
 const MAX_POINTS_PER_UPDATE: usize = 4;
 const POINTS_PRUNE_LENGTH: usize = MAX_POINTS_CAP - MAX_POINTS_PER_UPDATE;
+const MAX_WINDOW_SIZE: usize = 32; // Sufficient for wall_window_size up to ~21
+const CALIBRATION_COUNT: usize = 10;
+const CALIBRATION_MIN_G: f32 = -8.0;
+const CALIBRATION_MAX_G: f32 = 8.0;
 
 pub struct ObjectDetector {
     pub theta: f32,
@@ -26,14 +30,10 @@ pub struct ObjectDetector {
     pub points: ArrayVec<(f32, f32, u64), MAX_POINTS_CAP>,
     pub last_lidar_theta: f32,
     accel_offset: f32,
-    calibration_samples: Vec<f32>,
+    calibration_samples: ArrayVec<f32, CALIBRATION_COUNT>,
     calibration_done: bool,
     smoothed_accel_y: f32,
 }
-
-const CALIBRATION_COUNT: usize = 10;
-const CALIBRATION_MIN_G: f32 = -8.0;
-const CALIBRATION_MAX_G: f32 = 8.0;
 
 impl ObjectDetector {
     pub fn new() -> Self {
@@ -44,7 +44,7 @@ impl ObjectDetector {
             points: ArrayVec::new(),
             last_lidar_theta: 0.0,
             accel_offset: 0.0,
-            calibration_samples: Vec::new(),
+            calibration_samples: ArrayVec::new(),
             calibration_done: false,
             smoothed_accel_y: 0.0,
         }
@@ -107,7 +107,9 @@ impl ObjectDetector {
                 let accel_y = self.smoothed_accel_y;
                 if !self.calibration_done {
                     if CALIBRATION_MIN_G <= raw_accel_y && raw_accel_y <= CALIBRATION_MAX_G {
-                        self.calibration_samples.push(raw_accel_y);
+                        if self.calibration_samples.len() < CALIBRATION_COUNT {
+                            self.calibration_samples.push(raw_accel_y);
+                        }
                     }
                     if self.calibration_samples.len() >= CALIBRATION_COUNT {
                         self.accel_offset = self.calibration_samples.iter().sum::<f32>() / self.calibration_samples.len() as f32;
@@ -127,7 +129,7 @@ impl ObjectDetector {
                 };
                 let step_theta = delta_theta / distances.len() as f32;
 
-                let mut points_this_event: Vec<(f32, f32, u64)> = Vec::new();
+                let mut points_this_event: ArrayVec<(f32, f32, u64), MAX_POINTS_PER_UPDATE> = ArrayVec::new();
                 for (i, &d) in distances.iter().enumerate() {
                     if 50.0 < d && d < 1600.0 {
                         let angle = self.theta - ((distances.len() as f32 - i as f32 - 1.0) * step_theta);
@@ -159,55 +161,72 @@ impl ObjectDetector {
             return ((0.0, 0.0), (0.0, 0.0), (100.0, 100.0));
         }
 
-        let mut points_with_data: Vec<(f32, f32, f32, f32)> = self.points.iter().map(|&(x, y, _)| {
-            let dist = sqrtf(x * x + y * y);
-            let angle = rem_euclid_f32(atan2f(y, x), 2.0 * PI);
-            (x, y, dist, angle)
-        }).collect();
-        points_with_data.sort_by(|a, b| a.3.partial_cmp(&b.3).unwrap_or(Ordering::Equal));
+        // Sorted indices by angle
+        let mut sorted_indices: ArrayVec<usize, MAX_POINTS_CAP> = (0..self.points.len()).collect();
+        sorted_indices.sort_by(|&a, &b| {
+            let angle_a = rem_euclid_f32(atan2f(self.points[a].1, self.points[a].0), 2.0 * PI);
+            let angle_b = rem_euclid_f32(atan2f(self.points[b].1, self.points[b].0), 2.0 * PI);
+            angle_a.partial_cmp(&angle_b).unwrap_or(Ordering::Equal)
+        });
 
-        let wall_window_size = 5.max(points_with_data.len() / 12);
-        let mut windows: Vec<(f32, Vec<(f32, f32)>)> = Vec::new();
-        let mut min_dist = f32::INFINITY;
-        let mut max_dist = f32::NEG_INFINITY;
-        let mut closest_wall_points: Vec<(f32, f32)> = Vec::new();
-        let mut open_space_points: Vec<(f32, f32)> = Vec::new();
+        let n = self.points.len();
+        let wall_window_size = 5.max(n / 12).min(MAX_WINDOW_SIZE);
 
-        for i in 0..points_with_data.len() {
-            let mut window_points: Vec<(f32, f32)> = Vec::with_capacity(wall_window_size);
-            let mut distances: Vec<f32> = Vec::with_capacity(wall_window_size);
+        // Medians for each window
+        let mut medians: ArrayVec<f32, MAX_POINTS_CAP> = ArrayVec::new();
+        let mut temp_dists: ArrayVec<f32, MAX_WINDOW_SIZE> = ArrayVec::new();
+
+        let mut min_median = f32::INFINITY;
+        let mut max_median = f32::NEG_INFINITY;
+        let mut min_median_idx = 0;
+        let mut max_median_idx = 0;
+
+        for i in 0..n {
+            temp_dists.clear();
             for j in 0..wall_window_size {
-                let idx = (i + j) % points_with_data.len();
-                let p = points_with_data[idx];
-                window_points.push((p.0, p.1));
-                distances.push(p.2);
+                let idx = sorted_indices[(i + j) % n];
+                let dist = sqrtf(self.points[idx].0 * self.points[idx].0 + self.points[idx].1 * self.points[idx].1);
+                temp_dists.push(dist);
             }
-            distances.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
-            let median_dist = distances[distances.len() / 2];
-            windows.push((median_dist, window_points.clone()));
+            temp_dists.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+            let median = temp_dists[temp_dists.len() / 2];
+            medians.push(median);
 
-            if 120.0 <= median_dist && median_dist <= 1500.0 {
-                if median_dist < min_dist {
-                    min_dist = median_dist;
-                    closest_wall_points = window_points.clone();
+            if 120.0 <= median && median <= 1500.0 {
+                if median < min_median {
+                    min_median = median;
+                    min_median_idx = i;
                 }
-                if median_dist > max_dist {
-                    max_dist = median_dist;
-                    open_space_points = window_points.clone();
+                if median > max_median {
+                    max_median = median;
+                    max_median_idx = i;
                 }
             }
         }
 
-        let mut distance_changes: Vec<(f32, usize)> = Vec::new();
-        for i in 0..windows.len() - 1 {
-            let dist_diff = fabsf(windows[i + 1].0 - windows[i].0);
+        // Compute prefix sums for medians
+        let mut prefix_medians: ArrayVec<f32, {MAX_POINTS_CAP + 1}> = ArrayVec::new();
+        prefix_medians.push(0.0);
+        for &med in &medians {
+            prefix_medians.push(prefix_medians.last().unwrap() + med);
+        }
+
+        // Distance changes
+        let mut distance_changes: ArrayVec<(f32, usize), MAX_POINTS_CAP> = ArrayVec::new();
+        for i in 0..n - 1 {
+            let dist_diff = fabsf(medians[i + 1] - medians[i]);
             distance_changes.push((dist_diff, i));
         }
+        // Add wrap-around change
+        let wrap_diff = fabsf(medians[0] - medians[n - 1]);
+        distance_changes.push((wrap_diff, n - 1));
         distance_changes.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal));
 
+        // Object detection
         let mut best_score = f32::NEG_INFINITY;
-        let mut best_region: Option<(usize, usize, Vec<(f32, f32)>, f32)> = None;
-        let mut object_points: Vec<(f32, f32)> = Vec::new();
+        let mut best_idx1 = 0;
+        let mut best_idx2 = 0;
+        let mut best_is_single = false;
 
         // Paired
         for i in 0..distance_changes.len() {
@@ -220,27 +239,24 @@ impl ObjectDetector {
                 if idx2 - idx1 < 4 || idx2 - idx1 > 30 {
                     continue;
                 }
-                let middle_dists: Vec<f32> = (idx1 + 1..idx2).map(|k| windows[k].0).collect();
-                if middle_dists.is_empty() {
+                let middle_count = (idx2 - idx1 - 1) as f32;
+                if middle_count < 1.0 {
                     continue;
                 }
-                let avg_middle_dist = middle_dists.iter().sum::<f32>() / middle_dists.len() as f32;
-                let start_dist = windows[idx1].0;
-                let end_dist = windows[idx2].0;
+                let sum_middle = prefix_medians[idx2] - prefix_medians[idx1 + 1];
+                let avg_middle_dist = sum_middle / middle_count;
+                let start_dist = medians[idx1];
+                let end_dist = medians[idx2];
                 if avg_middle_dist < start_dist.min(end_dist) - 100.0 {
                     let depth = start_dist.min(end_dist) - avg_middle_dist;
-                    let mut region_points: Vec<(f32, f32)> = Vec::new();
-                    for k in idx1 + 1..idx2 {
-                        region_points.extend(windows[k].1.clone());
-                    }
-                    if region_points.len() < 2 {
-                        continue;
-                    }
-                    let score = depth * region_points.len().min(3) as f32;
+                    let union_len = (wall_window_size + (idx2 - idx1 - 2)) as f32; // Approximate union
+                    let score = depth * union_len.min(3.0);
                     if depth > 100.0 && 120.0 <= avg_middle_dist && avg_middle_dist <= 1200.0 {
                         if score > best_score {
                             best_score = score;
-                            best_region = Some((idx1 + 1, idx2, region_points, avg_middle_dist));
+                            best_idx1 = idx1;
+                            best_idx2 = idx2;
+                            best_is_single = false;
                         }
                     }
                 }
@@ -248,108 +264,113 @@ impl ObjectDetector {
         }
 
         // Single
-        for &(dist_diff, idx) in &distance_changes {
+        for &(dist_diff, mut idx) in &distance_changes {
             if dist_diff < 80.0 {
                 continue;
             }
-            if idx + 1 < windows.len() {
-                if windows[idx + 1].0 < windows[idx].0 - 80.0 {
-                    let avg_middle_dist = windows[idx + 1].0;
-                    let region_points = windows[idx + 1].1.clone();
-                    let depth = windows[idx].0 - avg_middle_dist;
-                    let score = depth * region_points.len().min(3) as f32;
-                    if depth > 80.0 && 120.0 <= avg_middle_dist && avg_middle_dist <= 1200.0 && region_points.len() >= 1 {
-                        if score > best_score {
-                            best_score = score;
-                            best_region = Some((idx + 1, idx + 2, region_points, avg_middle_dist));
-                        }
-                    }
-                } else if windows[idx].0 < windows[idx + 1].0 - 80.0 {
-                    let avg_middle_dist = windows[idx].0;
-                    let region_points = windows[idx].1.clone();
-                    let depth = windows[idx + 1].0 - avg_middle_dist;
-                    let score = depth * region_points.len().min(3) as f32;
-                    if depth > 80.0 && 120.0 <= avg_middle_dist && avg_middle_dist <= 1200.0 && region_points.len() >= 1 {
-                        if score > best_score {
-                            best_score = score;
-                            best_region = Some((idx, idx + 1, region_points, avg_middle_dist));
-                        }
-                    }
+            let mut local_idx2 = if idx == n - 1 { 0 } else { idx + 1 };
+            let mut local_idx1 = idx;
+            let mut local_depth = medians[local_idx2] - medians[local_idx1];
+            let mut local_is_flipped = false;
+            if local_depth < -80.0 {
+                local_depth = -local_depth;
+                local_is_flipped = true;
+                core::mem::swap(&mut local_idx1, &mut local_idx2);
+            } else if local_depth < 80.0 {
+                continue;
+            }
+            let avg_middle_dist = medians[local_idx1];
+            let union_len = wall_window_size as f32;
+            let score = local_depth * union_len.min(3.0);
+            if local_depth > 80.0 && 120.0 <= avg_middle_dist && avg_middle_dist <= 1200.0 {
+                if score > best_score {
+                    best_score = score;
+                    best_idx1 = local_idx1;
+                    best_idx2 = local_idx2;
+                    best_is_single = true;
                 }
             }
         }
 
         // Fallback
-        if best_region.is_none() {
-            let mut max_protrusion = f32::NEG_INFINITY;
-            let mut best_window_points: Vec<(f32, f32)> = Vec::new();
-            for point in &points_with_data {
-                let (x, y, dist, _) = *point;
-                let mut window_idx_opt: Option<usize> = None;
-                for (i, (_, w_points)) in windows.iter().enumerate() {
-                    for wp in w_points {
-                        if fabsf(wp.0 - x) < 1e-6 && fabsf(wp.1 - y) < 1e-6 {
-                            window_idx_opt = Some(i);
-                            break;
-                        }
+        let mut max_protrusion = f32::NEG_INFINITY;
+        let mut best_fallback_idx = 0;
+        if best_score == f32::NEG_INFINITY {
+            for i in 0..n {
+                let dist = sqrtf(self.points[sorted_indices[i]].0.powi(2) + self.points[sorted_indices[i]].1.powi(2));
+                let mut neighbor_indices: ArrayVec<usize, 6> = ArrayVec::new(); // Up to 3 left + 3 right
+                for offset in 1..=3 {
+                    if i >= offset {
+                        neighbor_indices.push((i - offset) % n);
+                    } else {
+                        neighbor_indices.push((n + i - offset) % n);
                     }
-                    if window_idx_opt.is_some() {
-                        break;
-                    }
+                    neighbor_indices.push((i + offset) % n);
                 }
-                let window_idx = match window_idx_opt {
-                    Some(idx) => idx,
-                    None => continue,
-                };
-                let mut window_indices: Vec<usize> = Vec::new();
-                for i in 0..3 {
-                    if window_idx > i {
-                        window_indices.push(window_idx - 1 - i);
-                    }
-                    if window_idx < windows.len() - 1 - i {
-                        window_indices.push(window_idx + 1 + i);
-                    }
-                }
-                if window_indices.len() < 2 {
+                if neighbor_indices.len() < 2 {
                     continue;
                 }
-                let avg_neighbor_dist = window_indices.iter().map(|&i| windows[i].0).sum::<f32>() / window_indices.len() as f32;
+                let mut sum_neighbor_dist = 0.0;
+                for &ni in &neighbor_indices {
+                    sum_neighbor_dist += medians[ni];
+                }
+                let avg_neighbor_dist = sum_neighbor_dist / neighbor_indices.len() as f32;
                 let protrusion = avg_neighbor_dist - dist;
                 if protrusion > 50.0 && 120.0 <= dist && dist <= 1200.0 {
                     if protrusion > max_protrusion {
                         max_protrusion = protrusion;
-                        best_window_points = vec![(x, y)];
+                        best_fallback_idx = i;
                     }
                 }
             }
-            if !best_window_points.is_empty() {
-                object_points = best_window_points;
-            }
         }
 
-        if let Some(region) = best_region {
-            object_points = region.2;
-        }
-
+        // Compute positions
         let mut closest_wall = (0.0, 0.0);
-        if !closest_wall_points.is_empty() {
-            let sum_x = closest_wall_points.iter().map(|p| p.0).sum::<f32>();
-            let sum_y = closest_wall_points.iter().map(|p| p.1).sum::<f32>();
-            closest_wall = (sum_x / closest_wall_points.len() as f32, sum_y / closest_wall_points.len() as f32);
+        if min_median != f32::INFINITY {
+            let mut sum_x = 0.0;
+            let mut sum_y = 0.0;
+            for j in 0..wall_window_size {
+                let idx = sorted_indices[(min_median_idx + j) % n];
+                sum_x += self.points[idx].0;
+                sum_y += self.points[idx].1;
+            }
+            closest_wall = (sum_x / wall_window_size as f32, sum_y / wall_window_size as f32);
         }
 
         let mut open_space = (0.0, 0.0);
-        if !open_space_points.is_empty() {
-            let sum_x = open_space_points.iter().map(|p| p.0).sum::<f32>();
-            let sum_y = open_space_points.iter().map(|p| p.1).sum::<f32>();
-            open_space = (sum_x / open_space_points.len() as f32, sum_y / open_space_points.len() as f32);
+        if max_median != f32::NEG_INFINITY {
+            let mut sum_x = 0.0;
+            let mut sum_y = 0.0;
+            for j in 0..wall_window_size {
+                let idx = sorted_indices[(max_median_idx + j) % n];
+                sum_x += self.points[idx].0;
+                sum_y += self.points[idx].1;
+            }
+            open_space = (sum_x / wall_window_size as f32, sum_y / wall_window_size as f32);
         }
 
         let mut object_pos = (100.0, 100.0);
-        if !object_points.is_empty() {
-            let sum_x = object_points.iter().map(|p| p.0).sum::<f32>();
-            let sum_y = object_points.iter().map(|p| p.1).sum::<f32>();
-            object_pos = (sum_x / object_points.len() as f32, sum_y / object_points.len() as f32);
+        if best_score != f32::NEG_INFINITY {
+            let start_pos: usize;
+            let num_points: usize;
+            if best_is_single {
+                start_pos = best_idx1 % n;
+                num_points = wall_window_size;
+            } else {
+                start_pos = (best_idx1 + 1) % n;
+                num_points = wall_window_size + (best_idx2 - best_idx1 - 2);
+            }
+            let mut sum_x = 0.0;
+            let mut sum_y = 0.0;
+            for k in 0..num_points {
+                let idx = sorted_indices[(start_pos + k) % n];
+                sum_x += self.points[idx].0;
+                sum_y += self.points[idx].1;
+            }
+            object_pos = (sum_x / num_points as f32, sum_y / num_points as f32);
+        } else if max_protrusion != f32::NEG_INFINITY {
+            object_pos = (self.points[sorted_indices[best_fallback_idx]].0, self.points[sorted_indices[best_fallback_idx]].1);
         }
 
         (closest_wall, open_space, object_pos)
