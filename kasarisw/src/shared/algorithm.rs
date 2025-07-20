@@ -122,7 +122,7 @@ impl ObjectDetector {
                 self.last_xys.clear();
 
                 for (i, &d) in distances.iter().enumerate() {
-                    if 50.0 < d && d < 1600.0 {
+                    if 70.0 < d && d < 1600.0 {
                         let angle = rem_euclid_f32(
                             self.theta - ((distances.len() as f32 - i as f32 - 1.0) * step_theta),
                             2.0 * PI,

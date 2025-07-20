@@ -491,6 +491,14 @@ fn motor_update_handler() {
     });
 }
 
+fn process_raw_lidar_distance(d0: u16) -> f32 {
+    if d0 < 50 {
+        0.0  // The LIDAR doesn't see anything
+    } else {
+        d0 as f32 + sensors::LIDAR_DISTANCE_OFFSET
+    }
+}
+
 // LIDAR UART handler
 #[esp_hal::handler]
 fn uart2_handler() {
@@ -559,10 +567,10 @@ fn uart2_handler() {
                     .saturating_sub((batch_size - i as u64 - 1) * LIDAR_PACKET_INTERVAL_US);
                 let event = kasari::InputEvent::Lidar(
                     ts,
-                    parsed.distances[0] as f32 + sensors::LIDAR_DISTANCE_OFFSET,
-                    parsed.distances[1] as f32 + sensors::LIDAR_DISTANCE_OFFSET,
-                    parsed.distances[2] as f32 + sensors::LIDAR_DISTANCE_OFFSET,
-                    parsed.distances[3] as f32 + sensors::LIDAR_DISTANCE_OFFSET,
+                    process_raw_lidar_distance(parsed.distances[0]),
+                    process_raw_lidar_distance(parsed.distances[1]),
+                    process_raw_lidar_distance(parsed.distances[2]),
+                    process_raw_lidar_distance(parsed.distances[3]),
                 );
                 queue.push(event);
 
