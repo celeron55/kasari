@@ -21,7 +21,7 @@ pub const LOG_LIDAR: bool = false;
 pub const LOG_ALL_LIDAR: bool = false;
 pub const LOG_RECEIVER: bool = false;
 pub const LOG_WIFI_CONTROL: bool = false;
-pub const LOG_MOTOR_CONTROL: bool = false;
+pub const LOG_MOTOR_CONTROL: bool = true;
 pub const LOG_VBAT: bool = false;
 pub const LOG_DETECTION: bool = false;
 

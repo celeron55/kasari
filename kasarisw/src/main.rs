@@ -57,7 +57,7 @@ const PWM_HZ: f32 = 400.0;
 
 const RPM_PER_THROTTLE_PERCENT: f32 = 30.0;
 
-const MOTOR_UPDATE_HZ: u32 = 400;
+const MOTOR_UPDATE_HZ: f32 = 400.0;
 
 // When you are okay with using a nightly compiler it's better to use https://docs.rs/static_cell/2.1.0/static_cell/macro.make_static.html
 macro_rules! mk_static {
@@ -115,6 +115,8 @@ static mut MODULATOR_REF: Option<&'static Mutex<RefCell<shared::kasari::MotorMod
 static mut CHANNEL0_REF: Option<&'static Mutex<RefCell<Option<LedcChannel>>>> = None;
 static mut CHANNEL1_REF: Option<&'static Mutex<RefCell<Option<LedcChannel>>>> = None;
 static mut MOTOR_TIMER_REF: Option<&'static Mutex<RefCell<Option<TimgTimer>>>> = None;
+
+static MOTOR_UPDATE_COUNT: AtomicU32 = AtomicU32::new(0);
 
 #[esp_hal_embassy::main]
 async fn main(spawner: Spawner) {
@@ -206,27 +208,17 @@ async fn main(spawner: Spawner) {
 
     // Setup timer interrupt (after esp_hal_embassy::init(timg1.timer0);)
     let mut motor_timer = timg0.timer1;
-    unsafe {
-        interrupt::bind_interrupt(
-            esp_hal::peripherals::Interrupt::TG0_T1_LEVEL,
-            motor_update_handler,
-        );
-    }
     interrupt::enable(
-        esp_hal::peripherals::Interrupt::TG0_T1_LEVEL,
+        motor_timer.peripheral_interrupt(),
         interrupt::Priority::Priority1,
     )
     .unwrap();
-    // TODO: What's the API for this?
-    //motor_timer.enable_interrupt(true);
-
-    // Assume APB clock 80 MHz; ticks per update = 80_000_000 / MOTOR_UPDATE_HZ
-    let _ticks_per_update: u64 = 80_000_000 / MOTOR_UPDATE_HZ as u64;
-    //motor_timer.set_divider(1); // Full clock speed TODO
-    motor_timer.load_value(esp_hal::time::Duration::from_millis(0));
-    //motor_timer.enable_alarm(true); // TODO
-    //motor_timer.set_alarm(ticks_per_update); // TODO
-    //motor_timer.set_auto_reload(true); // TODO
+    motor_timer.load_value(esp_hal::time::Duration::from_micros(
+        (1_000_000.0 / MOTOR_UPDATE_HZ) as u64,
+    ));
+    motor_timer.enable_auto_reload(true);
+    motor_timer.enable_interrupt(true);
+    motor_timer.set_interrupt_handler(motor_update_handler);
     motor_timer.start();
 
     let motor_timer_static = MOTOR_TIMER.init(Mutex::new(RefCell::new(Some(motor_timer))));
@@ -438,13 +430,17 @@ async fn main(spawner: Spawner) {
 }
 
 // Motor modulator interrupt
-unsafe extern "C" fn motor_update_handler() {
+#[esp_hal::handler]
+fn motor_update_handler() {
+    //println!("motor_update_handler()");
     critical_section::with(|cs| {
         // Clear interrupt
         let mut timer_guard = unsafe { MOTOR_TIMER_REF.unwrap().borrow(cs).borrow_mut() };
         if let Some(timer) = timer_guard.as_mut() {
             timer.clear_interrupt();
         }
+
+        let update_i = MOTOR_UPDATE_COUNT.fetch_add(1, Ordering::Relaxed);
 
         let ts = embassy_time::Instant::now().as_ticks();
 
@@ -467,14 +463,18 @@ unsafe extern "C" fn motor_update_handler() {
             duty_left = 0;
             duty_right = 0;
             modulator_guard.mcp = None;
-            if shared::LOG_MOTOR_CONTROL {
-                esp_println::println!("Setting motor duty cycle: OFF (timeout or no plan)");
+            if shared::LOG_MOTOR_CONTROL && update_i % 100 == 0 {
+                esp_println::println!(
+                    "[{}] Setting motor duty cycle: OFF (timeout or no plan)",
+                    update_i
+                );
             }
-        } else if shared::LOG_MOTOR_CONTROL {
+        } else if shared::LOG_MOTOR_CONTROL && update_i % 100 == 0 {
             esp_println::println!(
-                "Setting motor duties: left={}, right={}",
-                duty_left,
-                duty_right
+                "[{}] Setting motor duties: left={}%, right={}%",
+                update_i,
+                left_percent,
+                right_percent,
             );
         }
 
