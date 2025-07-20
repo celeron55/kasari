@@ -1,4 +1,5 @@
 use std::error::Error;
+use std::f32::consts::PI;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Error as IoError};
 use std::time::Instant;
@@ -190,6 +191,7 @@ struct MyApp {
     first_lidar_found: bool,
     next_inject_ts: Option<u64>,
     last_read_ts: Option<u64>,
+    modulator: shared::kasari::MotorModulator,
 }
 
 impl MyApp {
@@ -219,6 +221,7 @@ impl MyApp {
             first_lidar_found: false,
             next_inject_ts: None,
             last_read_ts: None,
+            modulator: shared::kasari::MotorModulator::new(),
         }
     }
 
@@ -236,6 +239,7 @@ impl MyApp {
         self.first_lidar_found = false;
         self.next_inject_ts = None;
         self.last_read_ts = None;
+        self.modulator = shared::kasari::MotorModulator::new();
         // Note: lines cannot be reset unless reopen file, but assume no reset for streaming
     }
 
@@ -484,8 +488,7 @@ impl eframe::App for MyApp {
             }
         }
 
-        self.logic.step(None);
-
+        // Object detection
         let (closest_wall, open_space, object_pos) = self.logic.detector.detect_objects(self.debug);
 
         if self.debug && processed_events {
@@ -498,6 +501,24 @@ impl eframe::App for MyApp {
                 object_pos.0, object_pos.1);
         }
 
+        // Main logic
+        self.logic.step(None);
+
+        // Motor modulation
+        let current_ts = self.first_ts + (self.virtual_elapsed * 1_000_000.0) as u64;
+        if let Some(plan) = self.logic.motor_control_plan {
+            if let Some(last_ts) = self.logic.detector.last_ts {
+                self.modulator.sync(
+                    last_ts,
+                    self.logic.detector.theta,
+                    self.logic.detector.rpm,
+                    plan,
+                );
+            }
+        }
+        let (left_rpm, right_rpm) = self.modulator.step(current_ts);
+
+        // RPM values from event log
         let target_rpm = self.latest_planner.as_ref().map_or(0.0, |p| {
             if let InputEvent::Planner(_, plan, _, _, _, _, _) = p {
                 plan.rotation_speed
@@ -622,6 +643,40 @@ impl eframe::App for MyApp {
                     }
                 }
 
+                let motor_radius: f64 = 40.0;
+                let speed_scale: f64 = 2.0 / 30.0;
+                let left_phi: f32 = PI / 2.0;
+                let right_phi: f32 = -PI / 2.0;
+                let left_pos: [f64; 2] = [motor_radius * left_phi.cos() as f64, motor_radius * left_phi.sin() as f64];
+                let right_pos: [f64; 2] = [motor_radius * right_phi.cos() as f64, motor_radius * right_phi.sin() as f64];
+                let left_dir: [f64; 2] = [-left_phi.sin() as f64, left_phi.cos() as f64];
+                let right_dir: [f64; 2] = [-right_phi.sin() as f64, right_phi.cos() as f64];
+                let left_vec: [f64; 2] = [left_dir[0] * left_rpm as f64 * speed_scale, left_dir[1] * left_rpm as f64 * speed_scale];
+                let right_vec: [f64; 2] = [right_dir[0] * right_rpm as f64 * speed_scale, right_dir[1] * right_rpm as f64 * speed_scale];
+
+                // Motor positions
+                plot_ui.points(
+                    egui_plot::Points::new(vec![left_pos])
+                        .color(egui::Color32::WHITE)
+                        .radius(3.0),
+                );
+                plot_ui.points(
+                    egui_plot::Points::new(vec![right_pos])
+                        .color(egui::Color32::WHITE)
+                        .radius(3.0),
+                );
+
+                // Target speed vectors
+                plot_ui.line(
+                    Line::new(PlotPoints::new(vec![left_pos, [left_pos[0] + left_vec[0], left_pos[1] + left_vec[1]]]))
+                        .color(egui::Color32::from_rgb(255, 0, 0))
+                        .width(2.0),
+                );
+                plot_ui.line(
+                    Line::new(PlotPoints::new(vec![right_pos, [right_pos[0] + right_vec[0], right_pos[1] + right_vec[1]]]))
+                        .color(egui::Color32::from_rgb(0, 255, 0))
+                        .width(2.0),
+                );
 
                 if let Some(event) = &self.latest_planner {
                     if let InputEvent::Planner(ts, plan, cw, os, op, theta, rpm) = event {

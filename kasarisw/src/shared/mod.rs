@@ -56,14 +56,16 @@ pub fn rem_euclid_f32(x: f32, y: f32) -> f32 {
 }
 
 pub mod kasari {
+    use crate::shared::rem_euclid_f32;
     use crate::shared::CriticalSectionRawMutex;
     use crate::shared::ObjectDetector;
     use crate::shared::{get_current_timestamp, LOG_DETECTION, LOG_RECEIVER, LOG_WIFI_CONTROL};
     #[cfg(target_os = "none")]
     use alloc::vec::Vec;
+    use core::f32::consts::PI;
     #[cfg(target_os = "none")]
     use esp_println::println;
-    use libm::{fabsf, sqrtf};
+    use libm::{atan2f, cosf, fabsf, sqrtf};
     #[cfg(not(target_os = "none"))]
     use std::vec::Vec;
 
@@ -410,5 +412,59 @@ pub mod kasari {
             }
         }
         buf
+    }
+
+    pub const MODULATION_AMPLITUDE: f32 = 250.0; // RPM
+
+    pub struct MotorModulator {
+        last_ts: u64,
+        theta: f32,
+        rpm: f32,
+        mcp: Option<MotorControlPlan>,
+    }
+
+    impl MotorModulator {
+        pub fn new() -> Self {
+            Self {
+                last_ts: 0,
+                theta: 0.0,
+                rpm: 0.0,
+                mcp: None,
+            }
+        }
+
+        pub fn sync(&mut self, ts: u64, theta: f32, rpm: f32, plan: MotorControlPlan) {
+            self.last_ts = ts;
+            self.theta = theta;
+            self.rpm = rpm;
+            self.mcp = Some(plan);
+        }
+
+        pub fn step(&mut self, ts: u64) -> (f32, f32) {
+            if self.mcp.is_none() || ts < self.last_ts {
+                return (0.0, 0.0);
+            }
+
+            let dt = (ts - self.last_ts) as f32 / 1_000_000.0;
+            self.theta += self.rpm / 60.0 * 2.0 * PI * dt;
+            self.theta = rem_euclid_f32(self.theta, 2.0 * PI);
+            self.last_ts = ts;
+
+            let plan = self.mcp.unwrap();
+            let base_rpm = plan.rotation_speed;
+
+            let mag = sqrtf(plan.movement_x * plan.movement_x + plan.movement_y * plan.movement_y);
+            if mag == 0.0 {
+                return (base_rpm, base_rpm);
+            }
+
+            let phase = atan2f(plan.movement_y, plan.movement_x);
+            let mod_half = MODULATION_AMPLITUDE * mag * cosf(self.theta - phase);
+
+            let left_rpm = base_rpm - mod_half;
+            let right_rpm = base_rpm + mod_half;
+
+            (left_rpm, right_rpm)
+        }
     }
 }
