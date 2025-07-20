@@ -10,10 +10,9 @@ use embassy_executor::Spawner;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::signal::Signal;
 use embassy_time::Timer;
-use esp_hal::rmt::RxChannelAsync;
 use esp_hal::{
     gpio::Level,
-    rmt::{Channel, PulseCode},
+    rmt::{Channel, ConstChannelAccess, PulseCode, Rx, RxChannelAsync},
     spi::master::Spi,
     uart::{UartRx, UartTx},
     Async,
@@ -149,7 +148,10 @@ pub async fn accelerometer_task(
 }
 
 #[embassy_executor::task]
-pub async fn rmt_task(mut ch0: Channel<Async, 0>, event_channel: &'static EventChannel) {
+pub async fn rmt_task(
+    mut ch0: Channel<Async, ConstChannelAccess<Rx, 0>>,
+    event_channel: &'static EventChannel,
+) {
     let publisher = event_channel.publisher().unwrap();
 
     let mut buffer0: [u32; 1] = [PulseCode::empty(); 1];

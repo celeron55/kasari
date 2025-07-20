@@ -14,18 +14,19 @@ use esp_backtrace as _;
 use esp_hal::interrupt;
 use esp_hal::ledc::channel::ChannelIFace;
 use esp_hal::ledc::timer::TimerIFace;
+use esp_hal::timer::Timer as HwTimer;
 use esp_hal::{
     analog::{adc, adc::Adc, adc::AdcConfig},
-    gpio::{AnyPin, Level, Output, OutputConfig, Pin},
+    gpio::{Level, Output, OutputConfig},
     ledc::{channel as ledc_channel, channel::ChannelHW, timer as ledc_timer, Ledc},
-    rmt::{RxChannelAsync, RxChannelConfig, RxChannelCreatorAsync},
+    rmt::{RxChannelConfig, RxChannelCreator},
     spi::master::Spi,
     time::Rate,
     timer::timg::TimerGroup,
-    uart::{RxConfig, Uart, UartInterrupt},
-    Async, Blocking,
+    uart::{Uart, UartInterrupt},
+    Blocking,
 };
-use esp_println::{print, println};
+use esp_println::println;
 use esp_wifi::wifi::WifiDevice;
 use esp_wifi::{
     init,
@@ -38,7 +39,7 @@ use esp_wifi::{
 use ringbuffer::ConstGenericRingBuffer;
 use static_cell::StaticCell;
 extern crate alloc;
-use alloc::collections::VecDeque;
+use alloc::boxed::Box;
 use core::cell::RefCell;
 use core::sync::atomic::{AtomicU32, Ordering};
 use critical_section::Mutex;
@@ -55,6 +56,8 @@ const PASSWORD: &str = env!("PASSWORD");
 const PWM_HZ: f32 = 400.0;
 
 const RPM_PER_THROTTLE_PERCENT: f32 = 30.0;
+
+const MOTOR_UPDATE_HZ: u32 = 400;
 
 // When you are okay with using a nightly compiler it's better to use https://docs.rs/static_cell/2.1.0/static_cell/macro.make_static.html
 macro_rules! mk_static {
@@ -99,6 +102,20 @@ static mut SIGNAL_LIDAR_REF: Option<&'static Signal<NoopRawMutex, ()>> = None;
 
 static LIDAR_PACKET_COUNT: AtomicU32 = AtomicU32::new(0);
 
+type LedcTimer = ledc_timer::Timer<'static, esp_hal::ledc::LowSpeed>;
+type LedcChannel = ledc_channel::Channel<'static, esp_hal::ledc::LowSpeed>;
+type TimgTimer = esp_hal::timer::timg::Timer<'static>;
+
+static MODULATOR: StaticCell<Mutex<RefCell<shared::kasari::MotorModulator>>> = StaticCell::new();
+static CHANNEL0: StaticCell<Mutex<RefCell<Option<LedcChannel>>>> = StaticCell::new();
+static CHANNEL1: StaticCell<Mutex<RefCell<Option<LedcChannel>>>> = StaticCell::new();
+static MOTOR_TIMER: StaticCell<Mutex<RefCell<Option<TimgTimer>>>> = StaticCell::new();
+
+static mut MODULATOR_REF: Option<&'static Mutex<RefCell<shared::kasari::MotorModulator>>> = None;
+static mut CHANNEL0_REF: Option<&'static Mutex<RefCell<Option<LedcChannel>>>> = None;
+static mut CHANNEL1_REF: Option<&'static Mutex<RefCell<Option<LedcChannel>>>> = None;
+static mut MOTOR_TIMER_REF: Option<&'static Mutex<RefCell<Option<TimgTimer>>>> = None;
+
 #[esp_hal_embassy::main]
 async fn main(spawner: Spawner) {
     esp_println::println!("Init!");
@@ -137,6 +154,8 @@ async fn main(spawner: Spawner) {
             frequency: Rate::from_hz(PWM_HZ as u32),
         })
         .unwrap();
+    let lstimer0 = Box::leak(Box::new(lstimer0));
+
     let mut lstimer1 = ledc.timer::<esp_hal::ledc::LowSpeed>(ledc_timer::Number::Timer1);
     lstimer1
         .configure(ledc_timer::config::Config {
@@ -145,11 +164,12 @@ async fn main(spawner: Spawner) {
             frequency: Rate::from_hz(PWM_HZ as u32),
         })
         .unwrap();
+    let lstimer1 = Box::leak(Box::new(lstimer1));
 
     let mut channel0 = ledc.channel(ledc_channel::Number::Channel0, esc_right_pin);
     channel0
         .configure(ledc_channel::config::Config {
-            timer: &lstimer0,
+            timer: &*lstimer0,
             duty_pct: 10,
             pin_config: ledc_channel::config::PinConfig::PushPull,
         })
@@ -157,7 +177,7 @@ async fn main(spawner: Spawner) {
     let mut channel1 = ledc.channel(ledc_channel::Number::Channel1, esc_left_pin);
     channel1
         .configure(ledc_channel::config::Config {
-            timer: &lstimer1,
+            timer: &*lstimer1,
             duty_pct: 10,
             pin_config: ledc_channel::config::PinConfig::PushPull,
         })
@@ -165,6 +185,54 @@ async fn main(spawner: Spawner) {
 
     _ = channel0.set_duty(0);
     _ = channel1.set_duty(0);
+
+    let channel0_static = CHANNEL0.init(Mutex::new(RefCell::new(Some(channel0))));
+    unsafe {
+        CHANNEL0_REF = Some(channel0_static);
+    }
+
+    let channel1_static = CHANNEL1.init(Mutex::new(RefCell::new(Some(channel1))));
+    unsafe {
+        CHANNEL1_REF = Some(channel1_static);
+    }
+
+    // Create MotorModulator instance
+    let modulator_static = MODULATOR.init(Mutex::new(RefCell::new(
+        shared::kasari::MotorModulator::new(),
+    )));
+    unsafe {
+        MODULATOR_REF = Some(modulator_static);
+    }
+
+    // Setup timer interrupt (after esp_hal_embassy::init(timg1.timer0);)
+    let mut motor_timer = timg0.timer1;
+    unsafe {
+        interrupt::bind_interrupt(
+            esp_hal::peripherals::Interrupt::TG0_T1_LEVEL,
+            motor_update_handler,
+        );
+    }
+    interrupt::enable(
+        esp_hal::peripherals::Interrupt::TG0_T1_LEVEL,
+        interrupt::Priority::Priority1,
+    )
+    .unwrap();
+    // TODO: What's the API for this?
+    //motor_timer.enable_interrupt(true);
+
+    // Assume APB clock 80 MHz; ticks per update = 80_000_000 / MOTOR_UPDATE_HZ
+    let _ticks_per_update: u64 = 80_000_000 / MOTOR_UPDATE_HZ as u64;
+    //motor_timer.set_divider(1); // Full clock speed TODO
+    motor_timer.load_value(esp_hal::time::Duration::from_millis(0));
+    //motor_timer.enable_alarm(true); // TODO
+    //motor_timer.set_alarm(ticks_per_update); // TODO
+    //motor_timer.set_auto_reload(true); // TODO
+    motor_timer.start();
+
+    let motor_timer_static = MOTOR_TIMER.init(Mutex::new(RefCell::new(Some(motor_timer))));
+    unsafe {
+        MOTOR_TIMER_REF = Some(motor_timer_static);
+    }
 
     // 50Hz square wave to LIDAR encoder input (LEDC channel 2)
     let lidar_encoder_output_pin =
@@ -248,7 +316,7 @@ async fn main(spawner: Spawner) {
         .with_carrier_modulation(false);
     let rmt_ch0 = rmt
         .channel0
-        .configure(rc_receiver_ch1_pinmap, rx_config)
+        .configure_rx(rc_receiver_ch1_pinmap, rx_config)
         .unwrap();
 
     // Spawn tasks
@@ -263,7 +331,7 @@ async fn main(spawner: Spawner) {
     // Initialize the Wi-Fi controller
     let esp_wifi_ctrl = &*mk_static!(
         EspWifiController<'static>,
-        esp_wifi::init(timg0.timer0, rng.clone(), peripherals.RADIO_CLK).unwrap()
+        esp_wifi::init(timg0.timer0, rng.clone()).unwrap()
     );
     let (mut controller, interfaces) =
         esp_wifi::wifi::new(&esp_wifi_ctrl, peripherals.WIFI).unwrap();
@@ -345,36 +413,85 @@ async fn main(spawner: Spawner) {
 
         logic.step(Some(&mut publisher));
 
-        if let Some(ref plan) = logic.motor_control_plan {
-            let timestamp = embassy_time::Instant::now().as_ticks();
-            if timestamp - plan.timestamp < 500_000 {
-                let target_speed_rpm = plan.rotation_speed;
-                let throttle_percent = target_speed_rpm / RPM_PER_THROTTLE_PERCENT;
-                let duty = target_speed_to_pwm_duty(throttle_percent, 2u32.pow(8));
-                if shared::LOG_MOTOR_CONTROL {
-                    esp_println::println!("Setting motor duty cycle: {:?}", duty);
+        // Pass motor control plan to motor modulator interrupt
+        critical_section::with(|cs| {
+            let mut modulator = unsafe { MODULATOR_REF.unwrap().borrow(cs).borrow_mut() };
+            if let Some(ref plan) = logic.motor_control_plan {
+                let timestamp = embassy_time::Instant::now().as_ticks();
+                if timestamp - plan.timestamp < 500_000 {
+                    modulator.sync(
+                        timestamp,
+                        logic.detector.theta,
+                        logic.detector.rpm,
+                        plan.clone(),
+                    );
+                } else {
+                    modulator.mcp = None;
                 }
-                _ = channel0.set_duty_hw(duty);
-                _ = channel1.set_duty_hw(duty);
             } else {
-                if shared::LOG_MOTOR_CONTROL {
-                    esp_println::println!("Setting motor duty cycle: OFF (timeout)");
-                }
-                _ = channel0.set_duty(0);
-                _ = channel1.set_duty(0);
+                modulator.mcp = None;
             }
-        } else {
-            if shared::LOG_MOTOR_CONTROL {
-                esp_println::println!("Setting motor duty cycle: OFF (intentional)");
-            }
-            _ = channel0.set_duty(0);
-            _ = channel1.set_duty(0);
-        }
+        });
 
         Timer::after_millis(20).await;
     }
 }
 
+// Motor modulator interrupt
+unsafe extern "C" fn motor_update_handler() {
+    critical_section::with(|cs| {
+        // Clear interrupt
+        let mut timer_guard = unsafe { MOTOR_TIMER_REF.unwrap().borrow(cs).borrow_mut() };
+        if let Some(timer) = timer_guard.as_mut() {
+            timer.clear_interrupt();
+        }
+
+        let ts = embassy_time::Instant::now().as_ticks();
+
+        // Step modulator
+        let mut modulator_guard = unsafe { MODULATOR_REF.unwrap().borrow(cs).borrow_mut() };
+        let (left_rpm, right_rpm) = modulator_guard.step(ts);
+
+        let left_percent = left_rpm / RPM_PER_THROTTLE_PERCENT;
+        let right_percent = right_rpm / RPM_PER_THROTTLE_PERCENT;
+
+        let mut duty_left = target_speed_to_pwm_duty(left_percent, 255);
+        let mut duty_right = target_speed_to_pwm_duty(right_percent, 255);
+
+        if modulator_guard.mcp.is_none()
+            || modulator_guard
+                .mcp
+                .as_ref()
+                .map_or(false, |plan| ts - plan.timestamp > 500_000)
+        {
+            duty_left = 0;
+            duty_right = 0;
+            modulator_guard.mcp = None;
+            if shared::LOG_MOTOR_CONTROL {
+                esp_println::println!("Setting motor duty cycle: OFF (timeout or no plan)");
+            }
+        } else if shared::LOG_MOTOR_CONTROL {
+            esp_println::println!(
+                "Setting motor duties: left={}, right={}",
+                duty_left,
+                duty_right
+            );
+        }
+
+        // Update channels (right on channel0, left on channel1)
+        let mut ch0_guard = unsafe { CHANNEL0_REF.unwrap().borrow(cs).borrow_mut() };
+        if let Some(ch0) = ch0_guard.as_mut() {
+            _ = ch0.set_duty_hw(duty_right);
+        }
+
+        let mut ch1_guard = unsafe { CHANNEL1_REF.unwrap().borrow(cs).borrow_mut() };
+        if let Some(ch1) = ch1_guard.as_mut() {
+            _ = ch1.set_duty_hw(duty_left);
+        }
+    });
+}
+
+// LIDAR UART handler
 #[esp_hal::handler]
 fn uart2_handler() {
     //println!("uart2_handler");
@@ -517,7 +634,7 @@ async fn print_sta_ip_task(sta_stack: embassy_net::Stack<'static>, ssid: &'stati
 
 use crate::shared::EventChannel;
 use embassy_futures::select::{select, Either};
-use embedded_io_async::{Read, Write};
+use embedded_io_async::Write;
 
 #[embassy_executor::task]
 async fn listener_task(
@@ -526,7 +643,7 @@ async fn listener_task(
     event_channel: &'static EventChannel,
 ) {
     let mut subscriber = event_channel.subscriber().unwrap();
-    let mut publisher = event_channel.publisher().unwrap();
+    let publisher = event_channel.publisher().unwrap();
 
     let mut ap_rx_buffer = [0; 1536];
     let mut ap_tx_buffer = [0; 1536];
@@ -550,7 +667,7 @@ async fn listener_task(
         )
         .await;
 
-        let (r, mut socket) = match either {
+        let (r, socket) = match either {
             Either::First(r) => (r, &mut ap_socket),
             Either::Second(r) => (r, &mut sta_socket),
         };

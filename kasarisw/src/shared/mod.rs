@@ -420,7 +420,7 @@ pub mod kasari {
         last_ts: u64,
         theta: f32,
         rpm: f32,
-        mcp: Option<MotorControlPlan>,
+        pub mcp: Option<MotorControlPlan>,
     }
 
     impl MotorModulator {
