@@ -86,6 +86,8 @@ impl ObjectDetector {
             _ => {}
         };
 
+        // Ignore everything other than Lidar events. We want to synchronize to
+        // those only, and other events can arrive slightly out of order.
         let ts = match event {
             Lidar(ts, _, _, _, _) => *ts,
             _ => return,
