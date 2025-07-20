@@ -40,6 +40,7 @@ use ringbuffer::ConstGenericRingBuffer;
 use static_cell::StaticCell;
 extern crate alloc;
 use alloc::boxed::Box;
+use arrayvec::ArrayVec;
 use core::cell::RefCell;
 use core::sync::atomic::{AtomicU32, Ordering};
 use critical_section::Mutex;
@@ -58,6 +59,11 @@ const PWM_HZ: f32 = 400.0;
 const RPM_PER_THROTTLE_PERCENT: f32 = 30.0;
 
 const MOTOR_UPDATE_HZ: f32 = 200.0;
+
+// ~2083; generalize from consts LIDAR_ENCODER_HZ as u64, PULSES_PER_REV=15,
+// PACKETS_PER_REV=90
+const LIDAR_PACKET_INTERVAL_US: u64 =
+    1_000_000u64 / (((sensors::LIDAR_ENCODER_HZ as u64) * 90u64) / 15u64);
 
 // When you are okay with using a nightly compiler it's better to use https://docs.rs/static_cell/2.1.0/static_cell/macro.make_static.html
 macro_rules! mk_static {
@@ -79,7 +85,7 @@ fn target_speed_to_pwm_duty(speed_percent: f32, duty_range: u32) -> u32 {
     (duty_range * duty_percent as u32) / 100
 }
 
-const LIDAR_BUFFER_SIZE: usize = sensors::PACKET_SIZE * 4;
+const LIDAR_BUFFER_SIZE: usize = sensors::PACKET_SIZE * 6;
 const LIDAR_EVENT_QUEUE_SIZE: usize = 128;
 
 static UART2: StaticCell<Mutex<RefCell<Option<Uart<'static, Blocking>>>>> = StaticCell::new();
@@ -254,7 +260,7 @@ async fn main(spawner: Spawner) {
     let config = esp_hal::uart::Config::default()
         .with_rx(
             esp_hal::uart::RxConfig::default()
-                .with_fifo_full_threshold(sensors::PACKET_SIZE as u16),
+                .with_fifo_full_threshold((sensors::PACKET_SIZE * 4) as u16),
         )
         .with_baudrate(115200);
     let mut uart2 = Uart::new(peripherals.UART2, config)
@@ -479,66 +485,87 @@ fn uart2_handler() {
     critical_section::with(|cs| {
         let mut uart_ref = unsafe { UART2_REF.unwrap().borrow(cs).borrow_mut() };
         if let Some(uart) = uart_ref.as_mut() {
-            let mut temp = [0u8; sensors::PACKET_SIZE * 2];
+            let mut temp = [0u8; 128];
             let read_bytes = uart.read_buffered(&mut temp).unwrap_or(0);
             uart.clear_interrupts(UartInterrupt::RxFifoFull.into());
 
-            //println!("read_bytes={}", read_bytes);
-            let mut buf = unsafe { LIDAR_BYTE_BUFFER_REF.unwrap().borrow(cs).borrow_mut() };
+            // Accumulate new bytes into ring buffer
+            let mut buf_guard = unsafe { LIDAR_BYTE_BUFFER_REF.unwrap().borrow(cs).borrow_mut() };
             for &byte in &temp[0..read_bytes] {
-                buf.push(byte);
+                if buf_guard.len() < 256 {
+                    buf_guard.push(byte);
+                } else {
+                    println!("LIDAR: Byte buffer overflow");
+                }
             }
+            drop(buf_guard); // Release before parsing
 
-            while buf.len() >= sensors::PACKET_SIZE {
-                if buf.get(0) != Some(&sensors::HEAD_BYTE) {
-                    while let Some(byte) = buf.get(0) {
-                        if *byte == sensors::HEAD_BYTE {
+            // Now parse from ring buffer
+            let timestamp_end = embassy_time::Instant::now().as_ticks();
+            let mut parsed_packets: ArrayVec<sensors::ParsedPacket, 6> = ArrayVec::new();
+            let mut buf_guard = unsafe { LIDAR_BYTE_BUFFER_REF.unwrap().borrow(cs).borrow_mut() };
+
+            while buf_guard.len() >= sensors::PACKET_SIZE {
+                // Peek at first byte without dequeue
+                if *buf_guard.get(0).unwrap_or(&0) != sensors::HEAD_BYTE {
+                    // Skip invalid until head or end
+                    let mut skipped = 0;
+                    while let Some(&byte) = buf_guard.get(0) {
+                        buf_guard.dequeue();
+                        skipped += 1;
+                        if byte == sensors::HEAD_BYTE {
                             break;
                         }
-                        buf.dequeue();
+                    }
+                    if skipped > 0 {
+                        println!("LIDAR: Skipped {} invalid bytes", skipped);
                     }
                     continue;
                 }
 
+                // Extract packet (dequeue 22 bytes)
                 let mut packet = [0u8; sensors::PACKET_SIZE];
                 for i in 0..sensors::PACKET_SIZE {
-                    packet[i] = buf.get(i).copied().unwrap_or(0);
+                    packet[i] = buf_guard.dequeue().unwrap_or(0);
                 }
 
                 if let Some(parsed) = sensors::parse_packet(&packet) {
-                    let timestamp = embassy_time::Instant::now().as_ticks();
-                    let event = kasari::InputEvent::Lidar(
-                        timestamp,
-                        parsed.distances[0] as f32 + sensors::LIDAR_DISTANCE_OFFSET,
-                        parsed.distances[1] as f32 + sensors::LIDAR_DISTANCE_OFFSET,
-                        parsed.distances[2] as f32 + sensors::LIDAR_DISTANCE_OFFSET,
-                        parsed.distances[3] as f32 + sensors::LIDAR_DISTANCE_OFFSET,
-                    );
-                    let mut queue =
-                        unsafe { LIDAR_EVENT_QUEUE_REF.unwrap().borrow(cs).borrow_mut() };
-                    queue.push(event);
-
-                    let packet_i = LIDAR_PACKET_COUNT.fetch_add(1, Ordering::Relaxed);
-                    if (packet_i % 20 == 1 || shared::LOG_ALL_LIDAR) && shared::LOG_LIDAR {
-                        // This message has to be quite short when logging all
-                        // LIDAR messages instead of just every 20th
-                        println!(
-                            "Lidar {}: t={}, d={},{},{},{}",
-                            packet_i,
-                            timestamp,
-                            parsed.distances[0],
-                            parsed.distances[1],
-                            parsed.distances[2],
-                            parsed.distances[3]
-                        );
-                    }
-
-                    for _ in 0..sensors::PACKET_SIZE {
-                        buf.dequeue();
+                    if parsed_packets.try_push(parsed).is_err() {
+                        println!("LIDAR: Batch overflow");
                     }
                 } else {
-                    println!("Invalid packet");
-                    buf.clear();
+                    println!("LIDAR: Invalid packet in batch");
+                }
+            }
+
+            // Extrapolate and queue events (as before)
+            let batch_size = parsed_packets.len() as u64;
+            let mut queue = unsafe { LIDAR_EVENT_QUEUE_REF.unwrap().borrow(cs).borrow_mut() };
+            for (i, parsed) in parsed_packets.into_iter().enumerate() {
+                let ts = timestamp_end
+                    .saturating_sub((batch_size - i as u64 - 1) * LIDAR_PACKET_INTERVAL_US);
+                let event = kasari::InputEvent::Lidar(
+                    ts,
+                    parsed.distances[0] as f32 + sensors::LIDAR_DISTANCE_OFFSET,
+                    parsed.distances[1] as f32 + sensors::LIDAR_DISTANCE_OFFSET,
+                    parsed.distances[2] as f32 + sensors::LIDAR_DISTANCE_OFFSET,
+                    parsed.distances[3] as f32 + sensors::LIDAR_DISTANCE_OFFSET,
+                );
+                queue.push(event);
+
+                let packet_i = LIDAR_PACKET_COUNT.fetch_add(1, Ordering::Relaxed);
+                if (packet_i % 20 == 1 || shared::LOG_ALL_LIDAR) && shared::LOG_LIDAR {
+                    // This message has to be quite short when logging all
+                    // LIDAR messages instead of just every 20th
+                    println!(
+                        "Lidar {}: t={}, d={},{},{},{}",
+                        packet_i,
+                        ts,
+                        parsed.distances[0],
+                        parsed.distances[1],
+                        parsed.distances[2],
+                        parsed.distances[3]
+                    );
                 }
             }
         }
