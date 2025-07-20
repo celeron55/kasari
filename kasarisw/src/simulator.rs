@@ -580,7 +580,7 @@ impl eframe::App for MyApp {
                     .collect();
                 plot_ui.points(
                     egui_plot::Points::new(h_points)
-                        .color(egui::Color32::RED)
+                        .color(egui::Color32::LIGHT_BLUE)
                         .radius(6.0),
                 );
 
@@ -589,7 +589,7 @@ impl eframe::App for MyApp {
                 let hy = heading_len * self.logic.detector.theta.sin() as f64;
                 plot_ui.line(
                     Line::new(PlotPoints::new(vec![[0.0, 0.0], [hx, hy]]))
-                        .color(egui::Color32::RED)
+                        .color(egui::Color32::LIGHT_BLUE)
                         .width(2.0),
                 );
 
@@ -599,7 +599,7 @@ impl eframe::App for MyApp {
                             [0.0, 0.0],
                             [closest_wall.0 as f64, closest_wall.1 as f64],
                         ]))
-                        .color(egui::Color32::GREEN)
+                        .color(egui::Color32::BLUE)
                         .width(2.0),
                     );
                 }
@@ -610,7 +610,7 @@ impl eframe::App for MyApp {
                             [0.0, 0.0],
                             [open_space.0 as f64, open_space.1 as f64],
                         ]))
-                        .color(egui::Color32::BLUE)
+                        .color(egui::Color32::GREEN)
                         .width(2.0),
                     );
                 }
@@ -621,7 +621,7 @@ impl eframe::App for MyApp {
                             [0.0, 0.0],
                             [object_pos.0 as f64, object_pos.1 as f64],
                         ]))
-                        .color(egui::Color32::from_rgb(128, 0, 128))
+                        .color(egui::Color32::RED)
                         .width(2.0),
                     );
                 }
@@ -643,7 +643,9 @@ impl eframe::App for MyApp {
                     }
                 }
 
-                let motor_radius: f64 = 40.0;
+                // The motor part is currently commented out for clarity
+                // Modulation is known to work so we don't need to see this
+                /*let motor_radius: f64 = 40.0;
                 let speed_scale: f64 = 2.0 / 30.0;
                 let left_phi: f32 = PI / 2.0 + self.logic.detector.theta;
                 let right_phi: f32 = -PI / 2.0 + self.logic.detector.theta;
@@ -676,7 +678,7 @@ impl eframe::App for MyApp {
                     Line::new(PlotPoints::new(vec![right_pos, [right_pos[0] + right_vec[0], right_pos[1] + right_vec[1]]]))
                         .color(egui::Color32::from_rgb(0, 255, 0))
                         .width(2.0),
-                );
+                );*/
 
                 if let Some(event) = &self.latest_planner {
                     if let InputEvent::Planner(ts, plan, cw, os, op, theta, rpm) = event {
@@ -696,7 +698,7 @@ impl eframe::App for MyApp {
                             let (rot_x, rot_y) = self.rotate_point(cw.0, cw.1, offset);
                             plot_ui.points(
                                 egui_plot::Points::new(vec![[rot_x, rot_y]])
-                                    .color(egui::Color32::GREEN)
+                                    .color(egui::Color32::BLUE)
                                     .radius(dot_radius),
                             );
                         }
@@ -704,7 +706,7 @@ impl eframe::App for MyApp {
                             let (rot_x, rot_y) = self.rotate_point(os.0, os.1, offset);
                             plot_ui.points(
                                 egui_plot::Points::new(vec![[rot_x, rot_y]])
-                                    .color(egui::Color32::BLUE)
+                                    .color(egui::Color32::GREEN)
                                     .radius(dot_radius),
                             );
                         }
@@ -712,7 +714,7 @@ impl eframe::App for MyApp {
                             let (rot_x, rot_y) = self.rotate_point(op.0, op.1, offset);
                             plot_ui.points(
                                 egui_plot::Points::new(vec![[rot_x, rot_y]])
-                                    .color(egui::Color32::from_rgb(128, 0, 128))
+                                    .color(egui::Color32::RED)
                                     .radius(dot_radius),
                             );
                         }
