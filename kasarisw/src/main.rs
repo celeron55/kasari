@@ -42,7 +42,7 @@ extern crate alloc;
 use alloc::boxed::Box;
 use arrayvec::ArrayVec;
 use core::cell::RefCell;
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use critical_section::Mutex;
 use ringbuffer::RingBuffer;
 
@@ -123,6 +123,8 @@ static mut CHANNEL1_REF: Option<&'static Mutex<RefCell<Option<LedcChannel>>>> = 
 static mut MOTOR_TIMER_REF: Option<&'static Mutex<RefCell<Option<TimgTimer>>>> = None;
 
 static MOTOR_UPDATE_COUNT: AtomicU32 = AtomicU32::new(0);
+
+static BATTERY_PRESENT: AtomicBool = AtomicBool::new(false);
 
 #[esp_hal_embassy::main]
 async fn main(spawner: Spawner) {
@@ -412,6 +414,8 @@ async fn main(spawner: Spawner) {
 
         logic.step(Some(&mut publisher));
 
+        BATTERY_PRESENT.store(logic.battery_present, Ordering::Relaxed);
+
         // Pass motor control plan to motor modulator interrupt
         critical_section::with(|cs| {
             let mut modulator = unsafe { MODULATOR_REF.unwrap().borrow(cs).borrow_mut() };
@@ -453,10 +457,19 @@ fn motor_update_handler() {
         let left_percent = left_rpm / RPM_PER_THROTTLE_PERCENT;
         let right_percent = right_rpm / RPM_PER_THROTTLE_PERCENT;
 
-        let duty_left = target_speed_to_pwm_duty(left_percent, 255);
-        let duty_right = target_speed_to_pwm_duty(right_percent, 255);
+        let mut duty_left = target_speed_to_pwm_duty(left_percent, 255);
+        let mut duty_right = target_speed_to_pwm_duty(right_percent, 255);
 
-        if shared::LOG_MOTOR_CONTROL && update_i % 100 == 0 {
+        if !BATTERY_PRESENT.load(Ordering::Relaxed) {
+            duty_left = 0;
+            duty_right = 0;
+            if update_i % 100 == 0 {
+                esp_println::println!(
+                    "[{}] Shutting down motor controllers (battery not present)",
+                    update_i
+                );
+            }
+        } else if shared::LOG_MOTOR_CONTROL && update_i % 100 == 0 {
             esp_println::println!(
                 "[{}] Setting motor duties: left={}%, right={}%",
                 update_i,

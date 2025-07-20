@@ -1,4 +1,4 @@
-// kasarisw/src/shared/mod.rs
+// mod.rs
 #![cfg_attr(target_os = "none", no_std)]
 use core::cell::RefCell;
 use critical_section::Mutex;
@@ -62,7 +62,8 @@ pub mod kasari {
     use crate::shared::CriticalSectionRawMutex;
     use crate::shared::ObjectDetector;
     use crate::shared::{
-        get_current_timestamp, LOG_DETECTION, LOG_RECEIVER, LOG_WIFI_CONTROL, MAX_RPM_RAMP_RATE,
+        get_current_timestamp, LOG_DETECTION, LOG_RECEIVER, LOG_VBAT, LOG_WIFI_CONTROL,
+        MAX_RPM_RAMP_RATE,
     };
     #[cfg(target_os = "none")]
     use alloc::vec::Vec;
@@ -106,6 +107,7 @@ pub mod kasari {
         acceleration_z: f32,
         vbat: f32,
         vbat_ok: bool,
+        pub battery_present: bool,
         control_mode: u8,
         control_rotation_speed: f32,
         control_movement_speed: f32,
@@ -127,6 +129,7 @@ pub mod kasari {
                 acceleration_z: 0.0,
                 vbat: 0.0,
                 vbat_ok: false,
+                battery_present: false,
                 control_mode: 0,
                 control_rotation_speed: 0.0,
                 control_movement_speed: 0.0,
@@ -199,10 +202,21 @@ pub mod kasari {
                 }
                 InputEvent::Vbat(_timestamp, vbat) => {
                     self.vbat = vbat;
-                    if self.vbat_ok {
-                        self.vbat_ok = vbat > 9.0;
+                    self.battery_present = if self.battery_present {
+                        vbat >= 4.0
                     } else {
-                        self.vbat_ok = vbat > 10.0;
+                        vbat >= 4.5
+                    };
+                    self.vbat_ok = if self.vbat_ok {
+                        vbat >= 9.0
+                    } else {
+                        vbat >= 10.0
+                    };
+                    if LOG_VBAT {
+                        println!(
+                            "Vbat: {} V, ok: {}, present: {}",
+                            self.vbat, self.vbat_ok, self.battery_present
+                        );
                     }
                 }
                 InputEvent::WifiControl(_timestamp, mode, r, m, t) => {
@@ -257,7 +271,7 @@ pub mod kasari {
                 let obj_y = self.latest_object_pos.1;
                 let obj_dist = sqrtf(obj_x * obj_x + obj_y * obj_y);
 
-                if wall_dist > 0.0 && wall_dist < 200.0 && obj_dist > wall_dist {
+                if wall_dist > 200.0 && wall_dist < 200.0 && obj_dist > wall_dist {
                     let away_x = -wall_x;
                     let away_y = -wall_y;
                     let target_x = (away_x + self.latest_open_space.0) / 2.0;
