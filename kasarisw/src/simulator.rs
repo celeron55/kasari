@@ -19,12 +19,16 @@ struct Args {
     source: String,
 
     /// Enable debug prints
-    #[arg(long)]
+    #[arg(long, short)]
     debug: bool,
 
     /// Remove all WifiControl events and inject new ones with mode=2 every 100ms starting after first Lidar event
-    #[arg(long)]
+    #[arg(long, short)]
     inject_autonomous: bool,
+
+    /// Offset LIDAR's distance values (mm)
+    #[arg(long, short, default_value_t=0.0)]
+    lidar_distance_offset: f32,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -51,6 +55,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 lines,
                 args.debug,
                 args.inject_autonomous,
+                args.lidar_distance_offset,
             )))
         }),
     )?;
@@ -181,6 +186,7 @@ struct MyApp {
     show_planner_theta: bool,
     theta_offset: f32,
     inject_autonomous: bool,
+    lidar_distance_offset: f32,
     first_lidar_found: bool,
     next_inject_ts: Option<u64>,
     last_read_ts: Option<u64>,
@@ -191,6 +197,7 @@ impl MyApp {
         lines: Box<dyn Iterator<Item = Result<String, IoError>>>,
         debug: bool,
         inject_autonomous: bool,
+        lidar_distance_offset: f32,
     ) -> Self {
         Self {
             logic: MainLogic::new(),
@@ -208,6 +215,7 @@ impl MyApp {
             show_planner_theta: false,
             theta_offset: 0.0,
             inject_autonomous,
+            lidar_distance_offset,
             first_lidar_found: false,
             next_inject_ts: None,
             last_read_ts: None,
@@ -263,10 +271,11 @@ impl MyApp {
                                         }
                                     }
                                 }
-                                // Update event ts
+                                // Update event ts or other parameters
                                 event = match event {
                                     InputEvent::Lidar(_, d1, d2, d3, d4) => {
-                                        InputEvent::Lidar(adjusted_ts, d1, d2, d3, d4)
+                                        let o = self.lidar_distance_offset;
+                                        InputEvent::Lidar(adjusted_ts, d1 + o, d2 + o, d3 + o, d4 + o)
                                     }
                                     InputEvent::Accelerometer(_, ay, az) => {
                                         InputEvent::Accelerometer(adjusted_ts, ay, az)
