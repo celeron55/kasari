@@ -441,11 +441,12 @@ pub mod kasari {
         }
 
         pub fn step(&mut self, ts: u64) -> (f32, f32) {
-            if self.mcp.is_none() || ts < self.last_ts {
+            if self.mcp.is_none() {
                 return (0.0, 0.0);
             }
 
-            let dt = (ts - self.last_ts) as f32 / 1_000_000.0;
+            // Cast to i64 so that ts sometimes going backwards is fine
+            let dt = (ts as i64 - self.last_ts as i64) as f32 / 1_000_000.0;
             self.theta += self.rpm / 60.0 * 2.0 * PI * dt;
             self.theta = rem_euclid_f32(self.theta, 2.0 * PI);
             self.last_ts = ts;

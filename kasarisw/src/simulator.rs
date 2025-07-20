@@ -645,8 +645,8 @@ impl eframe::App for MyApp {
 
                 let motor_radius: f64 = 40.0;
                 let speed_scale: f64 = 2.0 / 30.0;
-                let left_phi: f32 = PI / 2.0;
-                let right_phi: f32 = -PI / 2.0;
+                let left_phi: f32 = PI / 2.0 + self.logic.detector.theta;
+                let right_phi: f32 = -PI / 2.0 + self.logic.detector.theta;
                 let left_pos: [f64; 2] = [motor_radius * left_phi.cos() as f64, motor_radius * left_phi.sin() as f64];
                 let right_pos: [f64; 2] = [motor_radius * right_phi.cos() as f64, motor_radius * right_phi.sin() as f64];
                 let left_dir: [f64; 2] = [-left_phi.sin() as f64, left_phi.cos() as f64];
