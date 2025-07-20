@@ -20,6 +20,7 @@ use algorithm::ObjectDetector;
 pub const LOG_LIDAR: bool = false;
 pub const LOG_ALL_LIDAR: bool = false;
 pub const LOG_RECEIVER: bool = false;
+pub const LOG_WIFI_CONTROL: bool = false;
 pub const LOG_MOTOR_CONTROL: bool = false;
 pub const LOG_VBAT: bool = false;
 pub const LOG_DETECTION: bool = false;
@@ -57,7 +58,7 @@ pub fn rem_euclid_f32(x: f32, y: f32) -> f32 {
 pub mod kasari {
     use crate::shared::CriticalSectionRawMutex;
     use crate::shared::ObjectDetector;
-    use crate::shared::{get_current_timestamp, LOG_DETECTION, LOG_RECEIVER};
+    use crate::shared::{get_current_timestamp, LOG_DETECTION, LOG_RECEIVER, LOG_WIFI_CONTROL};
     #[cfg(target_os = "none")]
     use alloc::vec::Vec;
     #[cfg(target_os = "none")]
@@ -199,7 +200,9 @@ pub mod kasari {
                     }
                 }
                 InputEvent::WifiControl(_timestamp, mode, r, m, t) => {
-                    println!("WifiControl({}, {}, {}, {})", mode, r, m, t);
+                    if LOG_WIFI_CONTROL {
+                        println!("WifiControl({}, {}, {}, {})", mode, r, m, t);
+                    }
                     self.control_mode = mode;
                     self.autonomous_enabled = mode == 2;
                     if !self.autonomous_enabled {
