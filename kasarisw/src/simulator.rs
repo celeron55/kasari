@@ -682,19 +682,16 @@ impl eframe::App for MyApp {
                     if let InputEvent::Planner(ts, plan, cw, os, op, theta, rpm) = event {
                         let offset = self.theta_offset;
 
-                        // Rotate and draw movement vector as yellow line
-                        let (rot_mv_x, rot_mv_y) = self.rotate_point(plan.movement_x, plan.movement_y, offset);
-                        plot_ui.line(
-                            Line::new(PlotPoints::new(vec![
-                                [0.0, 0.0],
-                                [rot_mv_x, rot_mv_y],
-                            ]))
-                            .color(egui::Color32::YELLOW)
-                            .width(2.0),
-                        );
-
-                        // Draw detection vectors as large dots after rotation
+                        // Draw detection and movement vectors as large dots after rotation
                         let dot_radius = 10.0;
+                        if plan.movement_x != 0.0 || plan.movement_y != 0.0 {
+                            let (rot_x, rot_y) = self.rotate_point(plan.movement_x, plan.movement_y, offset);
+                            plot_ui.points(
+                                egui_plot::Points::new(vec![[rot_x * 200.0, rot_y * 200.0]])
+                                    .color(egui::Color32::from_rgb(255, 165, 0)) // Orange
+                                    .radius(dot_radius),
+                            );
+                        }
                         if cw.0 != 0.0 || cw.1 != 0.0 {
                             let (rot_x, rot_y) = self.rotate_point(cw.0, cw.1, offset);
                             plot_ui.points(
