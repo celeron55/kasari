@@ -756,6 +756,9 @@ impl eframe::App for MyApp {
                 self.step_requested = true;
             }
         }
+        if ctx.input(|i| i.key_pressed(egui::Key::Q) || i.key_pressed(egui::Key::Escape)) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
 
         ctx.request_repaint();
     }
