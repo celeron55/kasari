@@ -430,8 +430,10 @@ impl eframe::App for MyApp {
         let mut speed = 0.0;
         if self.mode == "play" {
             speed = 1.0;
-        } else if self.mode == "slow" {
+        } else if self.mode == "semislow" {
             speed = 0.25;
+        } else if self.mode == "slow" {
+            speed = 0.05;
         } else if self.mode == "pause" {
             speed = 0.0;
         }
@@ -735,8 +737,12 @@ impl eframe::App for MyApp {
             });
         });
 
-        if ctx.input(|i| i.key_pressed(egui::Key::C)) {
+        if ctx.input(|i| i.key_pressed(egui::Key::V)) {
             self.mode = "play".to_string();
+            self.current_lidar_points.clear();
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::C)) {
+            self.mode = "semislow".to_string();
             self.current_lidar_points.clear();
         }
         if ctx.input(|i| i.key_pressed(egui::Key::X)) {
@@ -747,7 +753,7 @@ impl eframe::App for MyApp {
             self.mode = "pause".to_string();
             self.current_lidar_points.clear();
         }
-        if ctx.input(|i| i.key_pressed(egui::Key::E)) {
+        if ctx.input(|i| i.key_pressed(egui::Key::E) || i.key_pressed(egui::Key::Space)) {
             if self.mode != "step" {
                 self.mode = "step".to_string();
                 self.current_lidar_points.clear();
