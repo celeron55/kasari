@@ -17,6 +17,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub mod algorithm;
 use algorithm::ObjectDetector;
 
+pub const MAX_RPM_RAMP_RATE: f32 = 2000.0; // rpm/s
+
 pub const LOG_LIDAR: bool = false;
 pub const LOG_ALL_LIDAR: bool = false;
 pub const LOG_RECEIVER: bool = false;
@@ -59,7 +61,9 @@ pub mod kasari {
     use crate::shared::rem_euclid_f32;
     use crate::shared::CriticalSectionRawMutex;
     use crate::shared::ObjectDetector;
-    use crate::shared::{get_current_timestamp, LOG_DETECTION, LOG_RECEIVER, LOG_WIFI_CONTROL};
+    use crate::shared::{
+        get_current_timestamp, LOG_DETECTION, LOG_RECEIVER, LOG_WIFI_CONTROL, MAX_RPM_RAMP_RATE,
+    };
     #[cfg(target_os = "none")]
     use alloc::vec::Vec;
     use core::f32::consts::PI;
@@ -236,15 +240,11 @@ pub mod kasari {
 
         pub fn autonomous_update(&mut self) {
             let ts = get_current_timestamp();
-            if self.autonomous_start_ts.is_none() {
-                self.autonomous_start_ts = Some(ts);
-            }
             if !self.vbat_ok {
                 self.motor_control_plan = None;
                 return;
             }
-            let ramp_time = (ts - self.autonomous_start_ts.unwrap()) as f32 / 1_000_000.0;
-            let rotation_speed = 1000.0 * (ramp_time / 2.0).min(1.0);
+            let rotation_speed = 1000.0;
 
             let mut movement_x = 0.0;
             let mut movement_y = 0.0;
@@ -421,6 +421,7 @@ pub mod kasari {
         theta: f32,
         rpm: f32,
         pub mcp: Option<MotorControlPlan>,
+        current_rotation_speed: f32,
     }
 
     impl MotorModulator {
@@ -430,6 +431,7 @@ pub mod kasari {
                 theta: 0.0,
                 rpm: 0.0,
                 mcp: None,
+                current_rotation_speed: 0.0,
             }
         }
 
@@ -441,25 +443,38 @@ pub mod kasari {
         }
 
         pub fn step(&mut self, ts: u64) -> (f32, f32) {
-            if self.mcp.is_none() {
-                return (0.0, 0.0);
-            }
-
             // Cast to i64 so that ts sometimes going backwards is fine
             let dt = (ts as i64 - self.last_ts as i64) as f32 / 1_000_000.0;
             self.theta += self.rpm / 60.0 * 2.0 * PI * dt;
             self.theta = rem_euclid_f32(self.theta, 2.0 * PI);
             self.last_ts = ts;
 
-            let plan = self.mcp.unwrap();
-            let base_rpm = plan.rotation_speed;
+            if let Some(plan) = self.mcp.as_ref() {
+                // Cast to i64 so that ts sometimes going backwards is fine
+                if ts as i64 - plan.timestamp as i64 > 500_000 {
+                    self.mcp = None;
+                }
+            }
 
-            let mag = sqrtf(plan.movement_x * plan.movement_x + plan.movement_y * plan.movement_y);
+            let target_rotation_speed = self.mcp.as_ref().map_or(0.0, |p| p.rotation_speed);
+            let target_movement_x = self.mcp.as_ref().map_or(0.0, |p| p.movement_x);
+            let target_movement_y = self.mcp.as_ref().map_or(0.0, |p| p.movement_y);
+
+            // Tolerate negative dt (sometimes happens)
+            let max_delta = (MAX_RPM_RAMP_RATE * dt).max(0.0);
+            self.current_rotation_speed +=
+                (target_rotation_speed - self.current_rotation_speed).clamp(-max_delta, max_delta);
+
+            let base_rpm = self.current_rotation_speed;
+
+            let mag = sqrtf(
+                target_movement_x * target_movement_x + target_movement_y * target_movement_y,
+            );
             if mag == 0.0 {
                 return (base_rpm, base_rpm);
             }
 
-            let phase = atan2f(plan.movement_y, plan.movement_x);
+            let phase = atan2f(target_movement_y, target_movement_x);
             let mod_half = MODULATION_AMPLITUDE * mag * cosf(self.theta - phase);
 
             let left_rpm = base_rpm - mod_half;

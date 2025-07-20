@@ -185,8 +185,9 @@ async fn main(spawner: Spawner) {
         })
         .unwrap();
 
-    _ = channel0.set_duty(0);
-    _ = channel1.set_duty(0);
+    let neutral_duty = target_speed_to_pwm_duty(0.0, 255);
+    _ = channel0.set_duty_hw(neutral_duty);
+    _ = channel1.set_duty_hw(neutral_duty);
 
     let channel0_static = CHANNEL0.init(Mutex::new(RefCell::new(Some(channel0))));
     unsafe {
@@ -409,17 +410,12 @@ async fn main(spawner: Spawner) {
         critical_section::with(|cs| {
             let mut modulator = unsafe { MODULATOR_REF.unwrap().borrow(cs).borrow_mut() };
             if let Some(ref plan) = logic.motor_control_plan {
-                let timestamp = embassy_time::Instant::now().as_ticks();
-                if timestamp - plan.timestamp < 500_000 {
-                    modulator.sync(
-                        timestamp,
-                        logic.detector.theta,
-                        logic.detector.rpm,
-                        plan.clone(),
-                    );
-                } else {
-                    modulator.mcp = None;
-                }
+                modulator.sync(
+                    embassy_time::Instant::now().as_ticks(),
+                    logic.detector.theta,
+                    logic.detector.rpm,
+                    plan.clone(),
+                );
             } else {
                 modulator.mcp = None;
             }
@@ -451,25 +447,10 @@ fn motor_update_handler() {
         let left_percent = left_rpm / RPM_PER_THROTTLE_PERCENT;
         let right_percent = right_rpm / RPM_PER_THROTTLE_PERCENT;
 
-        let mut duty_left = target_speed_to_pwm_duty(left_percent, 255);
-        let mut duty_right = target_speed_to_pwm_duty(right_percent, 255);
+        let duty_left = target_speed_to_pwm_duty(left_percent, 255);
+        let duty_right = target_speed_to_pwm_duty(right_percent, 255);
 
-        if modulator_guard.mcp.is_none()
-            || modulator_guard
-                .mcp
-                .as_ref()
-                .map_or(false, |plan| ts - plan.timestamp > 500_000)
-        {
-            duty_left = 0;
-            duty_right = 0;
-            modulator_guard.mcp = None;
-            if shared::LOG_MOTOR_CONTROL && update_i % 100 == 0 {
-                esp_println::println!(
-                    "[{}] Setting motor duty cycle: OFF (timeout or no plan)",
-                    update_i
-                );
-            }
-        } else if shared::LOG_MOTOR_CONTROL && update_i % 100 == 0 {
+        if shared::LOG_MOTOR_CONTROL && update_i % 100 == 0 {
             esp_println::println!(
                 "[{}] Setting motor duties: left={}%, right={}%",
                 update_i,
