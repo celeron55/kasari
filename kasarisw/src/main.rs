@@ -554,7 +554,7 @@ fn uart2_handler() {
                 queue.push(event);
 
                 let packet_i = LIDAR_PACKET_COUNT.fetch_add(1, Ordering::Relaxed);
-                if (packet_i % 20 == 1 || shared::LOG_ALL_LIDAR) && shared::LOG_LIDAR {
+                if (packet_i % 100 == 1 || shared::LOG_ALL_LIDAR) && shared::LOG_LIDAR {
                     // This message has to be quite short when logging all
                     // LIDAR messages instead of just every 20th
                     println!(
