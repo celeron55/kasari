@@ -435,7 +435,7 @@ pub mod kasari {
         theta: f32,
         rpm: f32,
         pub mcp: Option<MotorControlPlan>,
-        current_rotation_speed: f32,
+        pub current_rotation_speed: f32,
     }
 
     impl MotorModulator {
