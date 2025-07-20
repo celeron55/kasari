@@ -27,7 +27,7 @@ struct Args {
     inject_autonomous: bool,
 
     /// Offset LIDAR's distance values (mm)
-    #[arg(long, short, default_value_t=0.0)]
+    #[arg(long, short, default_value_t = 0.0)]
     lidar_distance_offset: f32,
 }
 
@@ -275,7 +275,13 @@ impl MyApp {
                                 event = match event {
                                     InputEvent::Lidar(_, d1, d2, d3, d4) => {
                                         let o = self.lidar_distance_offset;
-                                        InputEvent::Lidar(adjusted_ts, d1 + o, d2 + o, d3 + o, d4 + o)
+                                        InputEvent::Lidar(
+                                            adjusted_ts,
+                                            d1 + o,
+                                            d2 + o,
+                                            d3 + o,
+                                            d4 + o,
+                                        )
                                     }
                                     InputEvent::Accelerometer(_, ay, az) => {
                                         InputEvent::Accelerometer(adjusted_ts, ay, az)

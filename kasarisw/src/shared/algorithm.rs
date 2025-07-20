@@ -17,7 +17,7 @@ const CALIBRATION_MAX_G: f32 = 8.0;
 pub struct ObjectDetector {
     pub theta: f32,
     pub rpm: f32,
-    pub last_ts: Option<u64>, // Last Lidar event timestamp
+    pub last_ts: Option<u64>,       // Last Lidar event timestamp
     pub bins_dist: [f32; NUM_BINS], // dist per bin, INF if invalid
     pub last_xys: ArrayVec<(f32, f32), MAX_POINTS_PER_UPDATE>,
     accel_offset: f32,
