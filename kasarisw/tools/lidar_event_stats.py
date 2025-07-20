@@ -55,8 +55,8 @@ def main():
         print(f"  Above {target_max} µs: {np.sum(valid_intervals > target_max)} ({np.sum(valid_intervals > target_max)/len(valid_intervals)*100:.2f}%)")
 
         # Distribution bins
-        bins = [0, 1000, 1500, 2000, 2500, 3000, 1_000_000]
-        bin_labels = ["<1000", "1000–1500", "1500–2000", "2000–2500", "2500–3000", "3000–1,000,000"]
+        bins = [0, 1000, 1500, 2000, 2500, 3000, 10_000, 1_000_000]
+        bin_labels = ["<1000", "1000–1500", "1500–2000", "1900–2500", "2500–3000", "3000-10,000", "3000–1,000,000"]
         hist, _ = np.histogram(valid_intervals, bins=bins)
         print("\nInterval Distribution:")
         for label, count in zip(bin_labels, hist):
