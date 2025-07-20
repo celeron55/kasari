@@ -1775,9 +1775,9 @@ dependencies = [
 
 [[package]]
 name = "esp-wifi"
-version = "0.14.1"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3700028d3d2ee57e6d2a5c5f60544711052f8d394e73a6f534b538fbfb9d058c"
+checksum = "84908f2e95cb99a200cf448abafc416576338be590778a15d9224eee237f3210"
 dependencies = [
  "allocator-api2",
  "cfg-if",
@@ -1788,17 +1788,16 @@ dependencies = [
  "embedded-io-async",
  "enumset",
  "esp-alloc",
- "esp-build 0.3.0",
- "esp-config 0.4.0",
+ "esp-config 0.5.0",
  "esp-hal",
- "esp-metadata 0.7.0",
+ "esp-metadata-generated",
  "esp-wifi-sys",
  "num-derive",
  "num-traits",
  "portable-atomic",
  "portable_atomic_enum",
  "rand_core 0.9.3",
- "xtensa-lx-rt 0.19.0",
+ "xtensa-lx-rt 0.20.0",
 ]
 
 [[package]]
@@ -2612,6 +2611,7 @@ dependencies = [
  "ringbuffer",
  "serde_json",
  "static_cell",
+ "xtensa-lx-rt 0.19.0",
 ]
 
 [[package]]
