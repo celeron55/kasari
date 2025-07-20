@@ -37,8 +37,8 @@ embassy-futures = "0.1.1"
 embassy-time = "0.4.0"
 embedded-io-async = "0.6.1"
 esp-backtrace = { version = "0.15.1", features = ["esp32", "println", "panic-handler"] }
-esp-hal          = { version = "1.0.0-beta.0", features = ["esp32", "unstable"] }
-esp-hal-embassy = {version = "0.8.1", features = ["esp32"] }
+esp-hal         = { version = "1.0.0-rc.0", features = ["esp32", "unstable"] }
+esp-hal-embassy = { version = "0.8.1", features = ["esp32"] }
 esp-println = { version = "0.13.1", features = ["esp32"] }
 nb = "1.1.0"
 esp-wifi = { version = "0.14.1", features = ["esp32", "wifi"] }

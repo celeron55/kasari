@@ -16,6 +16,13 @@ $ ./target/debug/simulator
 Embedded target
 ---------------
 
+Install toolchain:
+$ rm -rf ~/.rustup/toolchains/esp  # For a 100% clean install
+$ rustup override unset  # An override can confuse everything up
+$ cargo install espup
+$ espup install
+$ cp $HOME/export-esp.sh export-esp.sh
+
 Before any build commands:
 $ . export-esp.sh
 $ # Configure wifi network to connect to (in addition to hosting one):
