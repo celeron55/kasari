@@ -493,7 +493,7 @@ fn motor_update_handler() {
 
 fn process_raw_lidar_distance(d0: u16) -> f32 {
     if d0 < 50 {
-        0.0  // The LIDAR doesn't see anything
+        0.0 // The LIDAR doesn't see anything
     } else {
         d0 as f32 + sensors::LIDAR_DISTANCE_OFFSET
     }
