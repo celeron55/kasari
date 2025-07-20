@@ -411,10 +411,10 @@ fn uart2_handler() {
                     let timestamp = embassy_time::Instant::now().as_ticks();
                     let event = kasari::InputEvent::Lidar(
                         timestamp,
-                        parsed.distances[0] as f32,
-                        parsed.distances[1] as f32,
-                        parsed.distances[2] as f32,
-                        parsed.distances[3] as f32,
+                        parsed.distances[0] as f32 + sensors::LIDAR_DISTANCE_OFFSET,
+                        parsed.distances[1] as f32 + sensors::LIDAR_DISTANCE_OFFSET,
+                        parsed.distances[2] as f32 + sensors::LIDAR_DISTANCE_OFFSET,
+                        parsed.distances[3] as f32 + sensors::LIDAR_DISTANCE_OFFSET,
                     );
                     let mut queue =
                         unsafe { LIDAR_EVENT_QUEUE_REF.unwrap().borrow(cs).borrow_mut() };

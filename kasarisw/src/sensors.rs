@@ -35,6 +35,8 @@ pub const HEAD_BYTE: u8 = 0xFA;
 //   cycle (the data buffering cycle is about 7 messages). In terms of this, 81
 //   Hz appears to not work and 80 Hz appears to work, so we use 80 Hz.
 pub const LIDAR_ENCODER_HZ: f32 = 80.0;
+// Distance offset based on sensor's mounting position on the robot
+pub const LIDAR_DISTANCE_OFFSET: f32 = 36.0;
 
 #[embassy_executor::task]
 pub async fn lidar_writer(
