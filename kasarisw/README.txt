@@ -75,3 +75,14 @@ desired direction, synchronized with real-time orientation from LIDAR and
 accelerometer data. Rotation speeds between 500 to 2000 RPM allow LIDAR
 operation and linear movement of the robot.
 
+The robot has two rotations, one is its physical rotation which corresponds to
+where the LIDAR is pointing. The other is its virtual rotation which it aims to
+keep still relative to the world, of course limited by its sensor information
+(it only knows its rotational speed within some tolerance, and the offset is
+essentially random as the angle is integrated from RPM).
+
+In the simulator, the robot is shown with its virtual rotation pointing to a
+static direction (is it towards +X? I'm not sure). This makes the world shown
+mostly still, but rotated by the offset and measurement error of the robot's
+rotational speed measurement.
+
