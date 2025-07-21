@@ -105,3 +105,36 @@ pub struct Robot {
     pub theta: f32,
     pub rpm: f32,
 }
+
+impl Robot {
+    pub fn update(&mut self, dt: f32, movement_x: f32, movement_y: f32, world: &World) {
+        self.theta += (self.rpm / 60.0 * 2.0 * PI) * dt;
+        self.theta = rem_euclid_f32(self.theta, 2.0 * PI);
+
+        let accel_const = 2000.0; // mm/s² per unit mag
+        let drag_const = 3.0; // 3/s
+        let accel_x = -accel_const * movement_x;
+        let accel_y = -accel_const * movement_y;
+        self.vel_x += (accel_x - self.vel_x * drag_const) * dt;
+        self.vel_y += (accel_y - self.vel_y * drag_const) * dt;
+        self.pos_x += self.vel_x * dt;
+        self.pos_y += self.vel_y * dt;
+
+        // Bounce off walls
+        let elasticity = 0.5;
+        if self.pos_x < world.arena.min_x {
+            self.pos_x = world.arena.min_x;
+            self.vel_x = -self.vel_x * elasticity;
+        } else if self.pos_x > world.arena.max_x {
+            self.pos_x = world.arena.max_x;
+            self.vel_x = -self.vel_x * elasticity;
+        }
+        if self.pos_y < world.arena.min_y {
+            self.pos_y = world.arena.min_y;
+            self.vel_y = -self.vel_y * elasticity;
+        } else if self.pos_y > world.arena.max_y {
+            self.pos_y = world.arena.max_y;
+            self.vel_y = -self.vel_y * elasticity;
+        }
+    }
+}

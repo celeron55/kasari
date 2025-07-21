@@ -258,44 +258,11 @@ impl SimEventSource {
     }
 
     pub fn update_robot_physics(&mut self, dt: f32) {
-        // Update modulator
         self.modulator.step(self.last_advance_ts);
-
-        // Update rpm from modulator
         self.robot.rpm = self.modulator.current_rotation_speed;
-
-        self.robot.theta += (self.robot.rpm / 60.0 * 2.0 * PI) * dt;
-        self.robot.theta = rem_euclid_f32(self.robot.theta, 2.0 * PI);
-
         let movement_x = self.control_logic.motor_control_plan.map_or(0.0, |p| p.movement_x);
         let movement_y = self.control_logic.motor_control_plan.map_or(0.0, |p| p.movement_y);
-        let accel_const = 2000.0; // mm/s² per unit mag
-        let drag_const = 3.0; // 3/s
-        // For some reason we have to negate these in order for the robot to
-        // actually follow the movement planning
-        let accel_x = -accel_const * movement_x;
-        let accel_y = -accel_const * movement_y;
-        self.robot.vel_x += (accel_x - self.robot.vel_x * drag_const) * dt;
-        self.robot.vel_y += (accel_y - self.robot.vel_y * drag_const) * dt;
-        self.robot.pos_x += self.robot.vel_x * dt;
-        self.robot.pos_y += self.robot.vel_y * dt;
-
-        // Bounce off walls
-        let elasticity = 0.5;
-        if self.robot.pos_x < self.world.arena.min_x {
-            self.robot.pos_x = self.world.arena.min_x;
-            self.robot.vel_x = -self.robot.vel_x * elasticity;
-        } else if self.robot.pos_x > self.world.arena.max_x {
-            self.robot.pos_x = self.world.arena.max_x;
-            self.robot.vel_x = -self.robot.vel_x * elasticity;
-        }
-        if self.robot.pos_y < self.world.arena.min_y {
-            self.robot.pos_y = self.world.arena.min_y;
-            self.robot.vel_y = -self.robot.vel_y * elasticity;
-        } else if self.robot.pos_y > self.world.arena.max_y {
-            self.robot.pos_y = self.world.arena.max_y;
-            self.robot.vel_y = -self.robot.vel_y * elasticity;
-        }
+        self.robot.update(dt, movement_x, movement_y, &self.world);
     }
 
     pub fn ensure_buffer_has_event(&mut self) {
