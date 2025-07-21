@@ -269,8 +269,8 @@ impl SimEventSource {
 
         let movement_x = self.control_logic.motor_control_plan.map_or(0.0, |p| p.movement_x);
         let movement_y = self.control_logic.motor_control_plan.map_or(0.0, |p| p.movement_y);
-        let accel_const = 1000.0; // mm/s² per unit mag
-        let drag_const = 1.0; // 1/s
+        let accel_const = 2000.0; // mm/s² per unit mag
+        let drag_const = 3.0; // 3/s
         // For some reason we have to negate these in order for the robot to
         // actually follow the movement planning
         let accel_x = -accel_const * movement_x;

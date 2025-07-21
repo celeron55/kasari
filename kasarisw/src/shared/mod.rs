@@ -271,22 +271,22 @@ pub mod kasari {
                 let obj_y = self.latest_object_pos.1;
                 let obj_dist = sqrtf(obj_x * obj_x + obj_y * obj_y);
 
-                if wall_dist > 200.0 && wall_dist < 200.0 && obj_dist > wall_dist {
+                if wall_dist < 250.0 && wall_dist < obj_dist - 100.0 {
                     let away_x = -wall_x;
                     let away_y = -wall_y;
-                    let target_x = (away_x + self.latest_open_space.0) / 2.0;
-                    let target_y = (away_y + self.latest_open_space.1) / 2.0;
+                    let target_x = (away_x + self.latest_open_space.0 + obj_x) / 3.0;
+                    let target_y = (away_y + self.latest_open_space.1 + obj_y) / 3.0;
                     let target_len = sqrtf(target_x * target_x + target_y * target_y);
                     if target_len > 0.0 {
-                        movement_x = target_x / target_len * 1.0;
-                        movement_y = target_y / target_len * 1.0;
+                        movement_x = target_x / target_len * 0.5;
+                        movement_y = target_y / target_len * 0.5;
                     }
                 } else {
                     if obj_x != 100.0 || obj_y != 100.0 {
                         let obj_dist = sqrtf(obj_x * obj_x + obj_y * obj_y);
                         if obj_dist > 0.0 {
-                            movement_x = obj_x / obj_dist * 1.5;
-                            movement_y = obj_y / obj_dist * 1.5;
+                            movement_x = obj_x / obj_dist * 1.0;
+                            movement_y = obj_y / obj_dist * 1.0;
                         }
                     }
                 }
