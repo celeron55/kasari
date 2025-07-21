@@ -18,12 +18,13 @@ pub struct ObjectDetector {
     pub theta: f32,
     pub rpm: f32,
     pub last_ts: Option<u64>,       // Last Lidar event timestamp
-    pub bins_dist: [f32; NUM_BINS], // dist per bin, INF if invalid
+    pub bins_dist: [f32; NUM_BINS], // dist per bin, INF if no data
     pub last_xys: ArrayVec<(f32, f32), MAX_POINTS_PER_UPDATE>,
     accel_offset: f32,
     calibration_samples: ArrayVec<f32, CALIBRATION_COUNT>,
     calibration_done: bool,
     smoothed_accel_y: f32,
+    last_bin_idx: Option<usize>,
 }
 
 impl ObjectDetector {
@@ -39,6 +40,7 @@ impl ObjectDetector {
             calibration_samples: ArrayVec::new(),
             calibration_done: false,
             smoothed_accel_y: 0.0,
+            last_bin_idx: None,
         }
     }
 
@@ -118,26 +120,62 @@ impl ObjectDetector {
                     0.0
                 };
                 let step_theta = delta_theta / distances.len() as f32;
-
+                let direction_forward = self.rpm >= 0.0;
                 self.last_xys.clear();
-
                 for (i, &d) in distances.iter().enumerate() {
-                    if 70.0 < d && d < 1600.0 {
-                        let angle = rem_euclid_f32(
-                            self.theta - ((distances.len() as f32 - i as f32 - 1.0) * step_theta),
-                            2.0 * PI,
-                        );
-                        let x = d * cosf(angle);
-                        let y = d * sinf(angle);
-                        self.last_xys.push((x, y));
-                        let bin_idx = ((angle / BIN_ANGLE_STEP) as usize) % NUM_BINS;
-                        if self.bins_dist[bin_idx].is_finite() {
-                            self.bins_dist[bin_idx] = (self.bins_dist[bin_idx] + d) / 2.0;
-                        // Average if existing
+                    if !(70.0 < d && d < 1600.0) {
+                        continue;
+                    }
+                    let angle = rem_euclid_f32(
+                        self.theta - ((distances.len() as f32 - i as f32 - 1.0) * step_theta),
+                        2.0 * PI,
+                    );
+                    let bin_idx = ((angle / BIN_ANGLE_STEP) as usize) % NUM_BINS;
+                    let x = d * cosf(angle);
+                    let y = d * sinf(angle);
+                    self.last_xys.push((x, y));
+                    if let Some(prev_idx) = self.last_bin_idx {
+                        let mut delta: i32;
+                        if direction_forward {
+                            delta = bin_idx as i32 - prev_idx as i32;
+                            if delta < 0 {
+                                delta += NUM_BINS as i32;
+                            }
                         } else {
-                            self.bins_dist[bin_idx] = d;
+                            delta = prev_idx as i32 - bin_idx as i32;
+                            if delta < 0 {
+                                delta += NUM_BINS as i32;
+                            }
+                        }
+                        let mut steps = delta as usize;
+                        // If it's more than half of all the bins, it's some
+                        // kind of a wrap-around and we don't want to be filling
+                        // any extras as a result
+                        if steps > NUM_BINS / 2 {
+                            steps = 0;
+                        }
+                        // Fill in a maximum of a few bins. If it's more than
+                        // that, it could be a loss of data and it would just
+                        // end up drawing circles which don't represent anything
+                        // useful. In that case we'll leave in the old values
+                        // and hope the robot hasn't moved too much meanwhile
+                        steps = steps.min(5);
+                        if steps > 1 {
+                            if direction_forward {
+                                for k in 1..steps {
+                                    let fill_idx = (prev_idx + k) % NUM_BINS;
+                                    self.bins_dist[fill_idx] = d;
+                                }
+                            } else {
+                                for k in 1..steps {
+                                    let fill_idx = (prev_idx + NUM_BINS - k) % NUM_BINS;
+                                    self.bins_dist[fill_idx] = d;
+                                }
+                            }
                         }
                     }
+                    self.bins_dist[bin_idx] = d;
+                    self.last_bin_idx = Some(bin_idx);
                 }
             }
             _ => {}
