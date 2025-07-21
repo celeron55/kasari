@@ -5,6 +5,7 @@ version = "0.1.0"
 
 [[bin]]
 name = "kasarisw"
+path = "src/embedded.rs"
 required-features = ["esp"]
 
 [[bin]]
