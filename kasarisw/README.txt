@@ -72,5 +72,6 @@ The robot achieves directional movement while spinning by differentially
 modulating the RPM of its left and right motors, based on a target vector from
 the motion planner in world coordinates. This creates net propulsion in the
 desired direction, synchronized with real-time orientation from LIDAR and
-accelerometer data.
+accelerometer data. Rotation speeds between 500 to 2000 RPM allow LIDAR
+operation and linear movement of the robot.
 
