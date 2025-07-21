@@ -117,24 +117,98 @@ impl Robot {
         let accel_y = -accel_const * movement_y;
         self.vel_x += (accel_x - self.vel_x * drag_const) * dt;
         self.vel_y += (accel_y - self.vel_y * drag_const) * dt;
+
         self.pos_x += self.vel_x * dt;
         self.pos_y += self.vel_y * dt;
 
-        // Bounce off walls
-        let elasticity = 0.5;
-        if self.pos_x < world.arena.min_x {
-            self.pos_x = world.arena.min_x;
-            self.vel_x = -self.vel_x * elasticity;
-        } else if self.pos_x > world.arena.max_x {
-            self.pos_x = world.arena.max_x;
-            self.vel_x = -self.vel_x * elasticity;
+        const HALF_SIZE: f32 = 70.0;
+        const ELASTICITY: f32 = 0.5;
+
+        // Handle arena collisions
+        let mut robot_min_x = self.pos_x - HALF_SIZE;
+        let mut robot_min_y = self.pos_y - HALF_SIZE;
+        let mut robot_max_x = self.pos_x + HALF_SIZE;
+        let mut robot_max_y = self.pos_y + HALF_SIZE;
+
+        if robot_min_x < world.arena.min_x {
+            let pen = world.arena.min_x - robot_min_x;
+            self.pos_x += pen;
+            self.vel_x = -self.vel_x * ELASTICITY;
         }
-        if self.pos_y < world.arena.min_y {
-            self.pos_y = world.arena.min_y;
-            self.vel_y = -self.vel_y * elasticity;
-        } else if self.pos_y > world.arena.max_y {
-            self.pos_y = world.arena.max_y;
-            self.vel_y = -self.vel_y * elasticity;
+        if robot_max_x > world.arena.max_x {
+            let pen = robot_max_x - world.arena.max_x;
+            self.pos_x -= pen;
+            self.vel_x = -self.vel_x * ELASTICITY;
+        }
+        if robot_min_y < world.arena.min_y {
+            let pen = world.arena.min_y - robot_min_y;
+            self.pos_y += pen;
+            self.vel_y = -self.vel_y * ELASTICITY;
+        }
+        if robot_max_y > world.arena.max_y {
+            let pen = robot_max_y - world.arena.max_y;
+            self.pos_y -= pen;
+            self.vel_y = -self.vel_y * ELASTICITY;
+        }
+
+        // Update robot bounds after arena collision
+        robot_min_x = self.pos_x - HALF_SIZE;
+        robot_min_y = self.pos_y - HALF_SIZE;
+        robot_max_x = self.pos_x + HALF_SIZE;
+        robot_max_y = self.pos_y + HALF_SIZE;
+
+        // Handle object collisions
+        for obj in &world.objects {
+            if robot_max_x > obj.min_x && robot_min_x < obj.max_x && robot_max_y > obj.min_y && robot_min_y < obj.max_y {
+                // Overlapping
+                let pen_x_left = robot_max_x - obj.min_x;
+                let pen_x_right = obj.max_x - robot_min_x;
+                let pen_y_bottom = robot_max_y - obj.min_y;
+                let pen_y_top = obj.max_y - robot_min_y;
+
+                let mut min_pen = f32::INFINITY;
+                let mut resolve_dx = 0.0;
+                let mut resolve_dy = 0.0;
+                let mut normal_x = 0.0;
+                let mut normal_y = 0.0;
+
+                if pen_x_left > 0.0 && pen_x_left < min_pen {
+                    min_pen = pen_x_left;
+                    resolve_dx = -pen_x_left;
+                    normal_x = -1.0;
+                }
+                if pen_x_right > 0.0 && pen_x_right < min_pen {
+                    min_pen = pen_x_right;
+                    resolve_dx = pen_x_right;
+                    normal_x = 1.0;
+                }
+                if pen_y_bottom > 0.0 && pen_y_bottom < min_pen {
+                    min_pen = pen_y_bottom;
+                    resolve_dy = -pen_y_bottom;
+                    normal_y = -1.0;
+                }
+                if pen_y_top > 0.0 && pen_y_top < min_pen {
+                    min_pen = pen_y_top;
+                    resolve_dy = pen_y_top;
+                    normal_y = 1.0;
+                }
+
+                self.pos_x += resolve_dx;
+                self.pos_y += resolve_dy;
+
+                if normal_x != 0.0 {
+                    self.vel_x = -self.vel_x * ELASTICITY;
+                }
+                if normal_y != 0.0 {
+                    self.vel_y = -self.vel_y * ELASTICITY;
+                }
+
+                // Update bounds for potential next objects
+                robot_min_x = self.pos_x - HALF_SIZE;
+                robot_min_y = self.pos_y - HALF_SIZE;
+                robot_max_x = self.pos_x + HALF_SIZE;
+                robot_max_y = self.pos_y + HALF_SIZE;
+            }
         }
     }
 }
