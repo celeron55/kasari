@@ -70,6 +70,7 @@ This way, the robot's behavior can be compared to the simulator's behavior.
 
 The robot achieves directional movement while spinning by differentially
 modulating the RPM of its left and right motors, based on a target vector from
-the motion planner. This creates net propulsion in the desired direction,
-synchronized with real-time orientation from LIDAR and accelerometer data.
+the motion planner in world coordinates. This creates net propulsion in the
+desired direction, synchronized with real-time orientation from LIDAR and
+accelerometer data.
 
