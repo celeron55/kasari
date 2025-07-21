@@ -1,0 +1,391 @@
+use crate::events::{get_ts, parse_event};
+use crate::physics::{Rect, Robot, World};
+use kasarisw::shared::algorithm::{BIN_ANGLE_STEP, NUM_BINS};
+use kasarisw::shared::kasari::{InputEvent, MainLogic, MotorControlPlan};
+use kasarisw::shared::rem_euclid_f32;
+use kasarisw::shared::kasari;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::pubsub::PubSubChannel;
+use static_cell::StaticCell;
+use std::collections::VecDeque;
+use std::error::Error;
+use std::f32::consts::PI;
+use std::fs::File;
+use std::io::{self, BufRead, BufReader, Error as IoError};
+use std::iter::Iterator;
+
+pub trait EventSource {
+    fn peek_next_ts(&mut self) -> Option<u64>;
+    fn get_next_event(&mut self) -> Option<InputEvent>;
+}
+
+pub struct FileEventSource {
+    lines: Box<dyn Iterator<Item = Result<String, IoError>>>,
+    next_real_event: Option<InputEvent>,
+    last_read_ts: Option<u64>,
+    inject_autonomous: bool,
+    first_lidar_found: bool,
+    next_inject_ts: Option<u64>,
+    lidar_distance_offset: f32,
+}
+
+impl FileEventSource {
+    pub fn new(
+        lines: Box<dyn Iterator<Item = Result<String, IoError>>>,
+        inject_autonomous: bool,
+        lidar_distance_offset: f32,
+    ) -> Self {
+        Self {
+            lines,
+            next_real_event: None,
+            last_read_ts: None,
+            inject_autonomous,
+            first_lidar_found: false,
+            next_inject_ts: None,
+            lidar_distance_offset,
+        }
+    }
+
+    pub fn read_next_real(&mut self) -> bool {
+        loop {
+            if let Some(line_res) = self.lines.next() {
+                match line_res {
+                    Ok(line) => {
+                        if line.trim().is_empty() {
+                            continue;
+                        }
+                        match parse_event(&line) {
+                            Ok(mut event) => {
+                                if self.inject_autonomous
+                                    && matches!(&event, InputEvent::WifiControl(..))
+                                {
+                                    continue;
+                                }
+                                let mut adjusted_ts = get_ts(&event);
+                                if matches!(&event, InputEvent::WifiControl(..)) {
+                                    if let Some(last) = self.last_read_ts {
+                                        if ((adjusted_ts as i128 - last as i128).abs() > 5_000_000)
+                                        {
+                                            adjusted_ts = last + 1000;
+                                        }
+                                    }
+                                }
+                                // Update event ts or other parameters
+                                event = match event {
+                                    InputEvent::Lidar(_, d1, d2, d3, d4) => {
+                                        let o = self.lidar_distance_offset;
+                                        InputEvent::Lidar(
+                                            adjusted_ts,
+                                            d1 + o,
+                                            d2 + o,
+                                            d3 + o,
+                                            d4 + o,
+                                        )
+                                    }
+                                    InputEvent::Accelerometer(_, ay, az) => {
+                                        InputEvent::Accelerometer(adjusted_ts, ay, az)
+                                    }
+                                    InputEvent::Receiver(_, ch, pulse) => {
+                                        InputEvent::Receiver(adjusted_ts, ch, pulse)
+                                    }
+                                    InputEvent::Vbat(_, voltage) => {
+                                        InputEvent::Vbat(adjusted_ts, voltage)
+                                    }
+                                    InputEvent::WifiControl(_, mode, r, m, t) => {
+                                        InputEvent::WifiControl(adjusted_ts, mode, r, m, t)
+                                    }
+                                    InputEvent::Planner(_, plan, cw, os, op, theta, rpm) => {
+                                        InputEvent::Planner(
+                                            adjusted_ts,
+                                            plan,
+                                            cw,
+                                            os,
+                                            op,
+                                            theta,
+                                            rpm,
+                                        )
+                                    }
+                                };
+                                self.last_read_ts = Some(adjusted_ts);
+                                if !self.first_lidar_found
+                                    && matches!(&event, InputEvent::Lidar(..))
+                                {
+                                    self.first_lidar_found = true;
+                                    if self.inject_autonomous {
+                                        self.next_inject_ts = Some(adjusted_ts + 100_000);
+                                    }
+                                }
+                                self.next_real_event = Some(event);
+                                return true;
+                            }
+                            Err(e) => {
+                                eprintln!("Skipping invalid line: {} (error: {})", line.trim(), e);
+                                continue;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Error reading line: {}", e);
+                        return false;
+                    }
+                }
+            } else {
+                return false;
+            }
+        }
+    }
+}
+
+impl EventSource for FileEventSource {
+    fn peek_next_ts(&mut self) -> Option<u64> {
+        if self.next_real_event.is_none() {
+            if !self.read_next_real() {
+                return self.next_inject_ts;
+            }
+        }
+        match (
+            self.next_real_event.as_ref().map(get_ts),
+            self.next_inject_ts,
+        ) {
+            (None, None) => None,
+            (Some(rt), None) => Some(rt),
+            (None, Some(it)) => Some(it),
+            (Some(rt), Some(it)) => Some(rt.min(it)),
+        }
+    }
+
+    fn get_next_event(&mut self) -> Option<InputEvent> {
+        let next_real_ts = self.next_real_event.as_ref().map(get_ts);
+        let next_inj_ts = self.next_inject_ts;
+
+        let next_ts_opt = match (next_real_ts, next_inj_ts) {
+            (None, None) => return None,
+            (Some(rt), None) => Some(rt),
+            (None, Some(it)) => Some(it),
+            (Some(rt), Some(it)) => Some(rt.min(it)),
+        };
+
+        if next_ts_opt.is_some() {
+            let is_inject_next =
+                next_inj_ts.map_or(false, |it| next_real_ts.map_or(true, |rt| it <= rt));
+
+            let event = if is_inject_next {
+                let ts = next_inj_ts.unwrap();
+                self.next_inject_ts = Some(ts + 100_000);
+                InputEvent::WifiControl(ts, 2, 0.0, 0.0, 0.0)
+            } else {
+                self.next_real_event.take().unwrap()
+            };
+
+            Some(event)
+        } else {
+            None
+        }
+    }
+}
+
+static CHANNEL: StaticCell<PubSubChannel<CriticalSectionRawMutex, InputEvent, 32, 2, 6>> = StaticCell::new();
+
+pub struct SimEventSource {
+    control_logic: MainLogic,
+    control_publisher: embassy_sync::pubsub::Publisher<'static, CriticalSectionRawMutex, InputEvent, 32, 2, 6>,
+    control_subscriber: embassy_sync::pubsub::Subscriber<'static, CriticalSectionRawMutex, InputEvent, 32, 2, 6>,
+    event_buffer: VecDeque<InputEvent>,
+    modulator: kasari::MotorModulator,
+    robot: Robot,
+    world: World,
+    last_advance_ts: u64,
+    last_step_ts: u64,
+    next_vbat_ts: u64,
+    next_accel_ts: u64,
+    next_lidar_ts: u64,
+    last_lidar_ts: u64,
+    lidar_distance_offset: f32,
+    debug: bool,
+}
+
+impl SimEventSource {
+    pub fn new(lidar_distance_offset: f32, debug: bool) -> Self {
+        let channel = &*CHANNEL.init(PubSubChannel::new());
+        let mut source = Self {
+            control_logic: MainLogic::new(),
+            control_publisher: channel.publisher().unwrap(),
+            control_subscriber: channel.subscriber().unwrap(),
+            event_buffer: VecDeque::new(),
+            modulator: kasari::MotorModulator::new(),
+            robot: Robot {
+                pos_x: 0.0,
+                pos_y: 0.0,
+                vel_x: 0.0,
+                vel_y: 0.0,
+                theta: 0.0,
+                rpm: 0.0,
+            },
+            world: World {
+                arena: Rect {
+                    min_x: -600.0,
+                    min_y: -600.0,
+                    max_x: 600.0,
+                    max_y: 600.0,
+                },
+                objects: vec![Rect {
+                    min_x: 200.0,
+                    min_y: 200.0,
+                    max_x: 300.0,
+                    max_y: 300.0,
+                }],
+            },
+            last_advance_ts: 0,
+            last_step_ts: 0,
+            next_vbat_ts: 200_000,
+            next_accel_ts: 10_000,
+            next_lidar_ts: 2083,
+            last_lidar_ts: 0,
+            lidar_distance_offset,
+            debug,
+        };
+
+        // Initial events at ts=0
+        let wifi_event = InputEvent::WifiControl(0, 2, 0.0, 0.0, 0.0);
+        source.event_buffer.push_back(wifi_event.clone());
+        source.control_logic.feed_event(wifi_event);
+
+        let vbat_event = InputEvent::Vbat(0, 12.0);
+        source.event_buffer.push_back(vbat_event.clone());
+        source.control_logic.feed_event(vbat_event);
+
+        source
+    }
+
+    pub fn update_robot_physics(&mut self, dt: f32) {
+        // Update modulator
+        self.modulator.step(self.last_advance_ts);
+
+        // Update rpm from modulator
+        self.robot.rpm = self.modulator.current_rotation_speed;
+
+        self.robot.theta += (self.robot.rpm / 60.0 * 2.0 * PI) * dt;
+        self.robot.theta = rem_euclid_f32(self.robot.theta, 2.0 * PI);
+
+        let movement_x = self.control_logic.motor_control_plan.map_or(0.0, |p| p.movement_x);
+        let movement_y = self.control_logic.motor_control_plan.map_or(0.0, |p| p.movement_y);
+        let accel_const = 1000.0; // mm/s² per unit mag
+        let drag_const = 1.0; // 1/s
+        // For some reason we have to negate these in order for the robot to
+        // actually follow the movement planning
+        let accel_x = -accel_const * movement_x;
+        let accel_y = -accel_const * movement_y;
+        self.robot.vel_x += (accel_x - self.robot.vel_x * drag_const) * dt;
+        self.robot.vel_y += (accel_y - self.robot.vel_y * drag_const) * dt;
+        self.robot.pos_x += self.robot.vel_x * dt;
+        self.robot.pos_y += self.robot.vel_y * dt;
+
+        // Bounce off walls
+        let elasticity = 0.5;
+        if self.robot.pos_x < self.world.arena.min_x {
+            self.robot.pos_x = self.world.arena.min_x;
+            self.robot.vel_x = -self.robot.vel_x * elasticity;
+        } else if self.robot.pos_x > self.world.arena.max_x {
+            self.robot.pos_x = self.world.arena.max_x;
+            self.robot.vel_x = -self.robot.vel_x * elasticity;
+        }
+        if self.robot.pos_y < self.world.arena.min_y {
+            self.robot.pos_y = self.world.arena.min_y;
+            self.robot.vel_y = -self.robot.vel_y * elasticity;
+        } else if self.robot.pos_y > self.world.arena.max_y {
+            self.robot.pos_y = self.world.arena.max_y;
+            self.robot.vel_y = -self.robot.vel_y * elasticity;
+        }
+    }
+
+    pub fn ensure_buffer_has_event(&mut self) {
+        while self.event_buffer.is_empty() {
+            let next_ts = self.last_advance_ts + 1000; // Advance in 1ms steps
+            self.advance_to_ts(next_ts);
+        }
+    }
+
+    pub fn advance_to_ts(&mut self, target_ts: u64) {
+        while self.last_advance_ts < target_ts {
+            let next_vbat = self.next_vbat_ts;
+            let next_accel = self.next_accel_ts;
+            let next_lidar = self.next_lidar_ts;
+            let next_step = self.last_step_ts + 20_000;
+
+            let next_ts = [next_vbat, next_accel, next_lidar, next_step, target_ts + 1]
+                .iter()
+                .cloned()
+                .min()
+                .unwrap();
+
+            // Advance physics
+            let dt = (next_ts - self.last_advance_ts) as f32 / 1_000_000.0;
+            self.update_robot_physics(dt);
+
+            self.last_advance_ts = next_ts;
+
+            if next_vbat <= next_ts {
+                let event = InputEvent::Vbat(next_vbat, 12.0);
+                self.event_buffer.push_back(event.clone());
+                self.control_logic.feed_event(event);
+                self.next_vbat_ts += 200_000;
+            }
+
+            if next_accel <= next_ts {
+                let omega = (self.robot.rpm / 60.0 * 2.0 * PI).abs();
+                let a_g = (omega * omega * 0.0145) / 9.81;
+                let ay = a_g;
+                let az = 0.0;
+                let event = InputEvent::Accelerometer(next_accel, ay, az);
+                self.event_buffer.push_back(event.clone());
+                self.control_logic.feed_event(event);
+                self.next_accel_ts += 10_000;
+            }
+
+            if next_lidar <= next_ts {
+                let delta_t_sec = (next_lidar - self.last_lidar_ts) as f32 / 1_000_000.0;
+                let delta_theta = self.robot.rpm / 60.0 * 2.0 * PI * delta_t_sec;
+                let step_theta = delta_theta / 3.0;
+                let mut distances = [0.0; 4];
+                for i in 0..4 {
+                    let angle = rem_euclid_f32(
+                        self.robot.theta - ((3 - i) as f32 * step_theta),
+                        2.0 * PI,
+                    );
+                    let dir_x = angle.cos();
+                    let dir_y = angle.sin();
+                    let true_dist = self.world.raycast(self.robot.pos_x, self.robot.pos_y, dir_x, dir_y);
+                    distances[i] = (true_dist - self.lidar_distance_offset).max(0.0);
+                }
+                let event = InputEvent::Lidar(next_lidar, distances[0], distances[1], distances[2], distances[3]);
+                self.event_buffer.push_back(event.clone());
+                self.control_logic.feed_event(event);
+                self.last_lidar_ts = next_lidar;
+                self.next_lidar_ts += 2083;
+            }
+
+            if next_step <= next_ts {
+                self.control_logic.step(Some(&mut self.control_publisher));
+                while let Some(event) = self.control_subscriber.try_next_message_pure() {
+                    self.event_buffer.push_back(event.clone());
+                    if let InputEvent::Planner(ts, plan, _, _, _, _, _) = &event {
+                        self.modulator.sync(*ts, self.robot.theta, self.robot.rpm, plan.clone());
+                    }
+                }
+                self.last_step_ts = next_step;
+            }
+        }
+    }
+}
+
+impl EventSource for SimEventSource {
+    fn peek_next_ts(&mut self) -> Option<u64> {
+        self.ensure_buffer_has_event();
+        self.event_buffer.front().map(get_ts)
+    }
+
+    fn get_next_event(&mut self) -> Option<InputEvent> {
+        self.ensure_buffer_has_event();
+        self.event_buffer.pop_front()
+    }
+}

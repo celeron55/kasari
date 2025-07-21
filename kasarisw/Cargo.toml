@@ -9,7 +9,7 @@ required-features = ["esp"]
 
 [[bin]]
 name = "simulator"
-path = "src/simulator.rs"
+path = "src/simulator/mod.rs"
 required-features = ["pc"]
 
 [features]
