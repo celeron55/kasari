@@ -3,7 +3,6 @@
 
 use crate::shared::rem_euclid_f32;
 use arrayvec::ArrayVec;
-use core::cmp::Ordering;
 use core::f32::consts::PI;
 use libm::{atan2f, cosf, fabsf, sinf, sqrtf};
 
@@ -13,6 +12,15 @@ const MAX_POINTS_PER_UPDATE: usize = 4;
 const CALIBRATION_COUNT: usize = 10;
 const CALIBRATION_MIN_G: f32 = -8.0;
 const CALIBRATION_MAX_G: f32 = 8.0;
+
+pub struct DetectionResult {
+    pub closest_wall: (f32, f32),
+    pub open_space: (f32, f32),
+    pub object_pos: (f32, f32),
+    pub wall_distances: (f32, f32, f32, f32), // left (-x), right (+x), bottom (-y), top (+y)
+    pub position: (f32, f32),
+    pub velocity: (f32, f32),
+}
 
 pub struct ObjectDetector {
     pub theta: f32,
@@ -25,6 +33,15 @@ pub struct ObjectDetector {
     calibration_done: bool,
     smoothed_accel_y: f32,
     last_bin_idx: Option<usize>,
+    arena_w: f32,
+    arena_h: f32,
+    pos_x: f32,
+    pos_y: f32,
+    last_pos_x: f32,
+    last_pos_y: f32,
+    last_pos_ts: Option<u64>,
+    velocity: (f32, f32),
+    prev_best_k: Option<usize>,
 }
 
 impl ObjectDetector {
@@ -41,6 +58,15 @@ impl ObjectDetector {
             calibration_done: false,
             smoothed_accel_y: 0.0,
             last_bin_idx: None,
+            arena_w: 0.0,
+            arena_h: 0.0,
+            pos_x: 0.0,
+            pos_y: 0.0,
+            last_pos_x: 0.0,
+            last_pos_y: 0.0,
+            last_pos_ts: None,
+            velocity: (0.0, 0.0),
+            prev_best_k: None,
         }
     }
 
@@ -115,7 +141,7 @@ impl ObjectDetector {
             Lidar(_, d1, d2, d3, d4) => {
                 let distances = [*d1, *d2, *d3, *d4];
                 let delta_theta = if self.rpm != 0.0 {
-                    0.002083 * ((self.rpm / 60.0) * 2.0 * PI)
+                    0.00167 * ((self.rpm / 60.0) * 2.0 * PI)
                 } else {
                     0.0
                 };
@@ -148,18 +174,9 @@ impl ObjectDetector {
                             }
                         }
                         let mut steps = delta as usize;
-                        // If it's more than half of all the bins, it's some
-                        // kind of a wrap-around and we don't want to be filling
-                        // any extras as a result
                         if steps > NUM_BINS / 2 {
                             steps = 0;
                         }
-                        // Fill in a maximum of a few bins. If it's more than
-                        // that, it could be a loss of data and it would just
-                        // end up drawing circles which don't represent anything
-                        // useful. In that case we'll leave in the old values
-                        // and hope the robot hasn't moved too much meanwhile
-                        steps = steps.min(5);
                         if steps > 1 {
                             if direction_forward {
                                 for k in 1..steps {
@@ -186,7 +203,25 @@ impl ObjectDetector {
         self.bins_dist.iter().filter(|&&d| d.is_finite()).count()
     }
 
-    pub fn detect_objects(&self, debug: bool) -> ((f32, f32), (f32, f32), (f32, f32)) {
+    fn interp_dist(&self, phi: f32, delta: f32) -> f32 {
+        let f = rem_euclid_f32((phi - delta) / BIN_ANGLE_STEP, NUM_BINS as f32);
+        let low = f.floor() as usize % NUM_BINS;
+        let high = (low + 1) % NUM_BINS;
+        let frac = f - f.floor();
+        let d_low = self.bins_dist[low];
+        let d_high = self.bins_dist[high];
+        if d_low.is_finite() && d_high.is_finite() {
+            (1.0 - frac) * d_low + frac * d_high
+        } else if d_low.is_finite() {
+            d_low
+        } else if d_high.is_finite() {
+            d_high
+        } else {
+            f32::INFINITY
+        }
+    }
+
+    pub fn detect_objects(&mut self, debug: bool) -> DetectionResult {
         let n = NUM_BINS;
         let wall_window_size = 5.max(n / 12).min(15); // Reduced max
 
@@ -369,7 +404,7 @@ impl ObjectDetector {
             INIT.store(true, core::sync::atomic::Ordering::SeqCst);
         }
 
-        // Compute positions
+        // Compute closest_wall and object_pos as before
         let mut closest_wall = (0.0, 0.0);
         if min_avg != f32::INFINITY {
             let mut sum_x = 0.0;
@@ -389,7 +424,7 @@ impl ObjectDetector {
             }
         }
 
-        let mut open_space = (0.0, 0.0);
+        let mut fallback_open_space = (0.0, 0.0);
         if max_avg != f32::NEG_INFINITY {
             let mut sum_x = 0.0;
             let mut sum_y = 0.0;
@@ -404,7 +439,7 @@ impl ObjectDetector {
                 }
             }
             if count > 0.0 {
-                open_space = (sum_x / count, sum_y / count);
+                fallback_open_space = (sum_x / count, sum_y / count);
             }
         }
 
@@ -449,7 +484,196 @@ impl ObjectDetector {
             }
         }
 
-        (closest_wall, open_space, object_pos)
+        // New: Position and velocity estimation
+        let mut wall_distances = (f32::INFINITY, f32::INFINITY, f32::INFINITY, f32::INFINITY);
+        let mut position = (self.pos_x, self.pos_y);
+        let mut velocity = self.velocity;
+        let mut open_space = fallback_open_space;
+
+        if self.bin_count() > 80 && self.last_ts.is_some() {
+            let mut best_error = f32::INFINITY;
+            let mut best_k = 0;
+            let mut best_d_left = 0.0;
+            let mut best_d_right = 0.0;
+            let mut best_d_bottom = 0.0;
+            let mut best_d_top = 0.0;
+            let mut best_temp_x = 0.0;
+            let mut best_temp_y = 0.0;
+            let mut best_temp_w = 0.0;
+            let mut best_temp_h = 0.0;
+
+            for k in 0..NUM_BINS {
+                let delta = k as f32 * BIN_ANGLE_STEP;
+                let d_right = self.interp_dist(0.0, delta);
+                let d_left = self.interp_dist(PI, delta);
+                let d_top = self.interp_dist(PI / 2.0, delta);
+                let d_bottom = self.interp_dist(3.0 * PI / 2.0, delta);
+
+                if d_left.is_infinite()
+                    || d_right.is_infinite()
+                    || d_bottom.is_infinite()
+                    || d_top.is_infinite()
+                {
+                    continue;
+                }
+
+                let temp_x = d_left;
+                let temp_y = d_bottom;
+                let temp_w = d_left + d_right;
+                let temp_h = d_bottom + d_top;
+
+                let mut error = 0.0;
+                let num_samples = 8;
+                let mut valid_samples = 0;
+                for j in 0..num_samples {
+                    let phi = j as f32 * (2.0 * PI / num_samples as f32);
+                    let observed = self.interp_dist(phi, delta);
+                    if !observed.is_finite() {
+                        error += 1000.0;
+                        continue;
+                    }
+                    let dx = cosf(phi);
+                    let dy = sinf(phi);
+                    let mut min_t = f32::INFINITY;
+
+                    // Left wall (x=0)
+                    if dx.abs() > 1e-6 {
+                        let t = (0.0 - temp_x) / dx;
+                        if t > 0.0 {
+                            let hit_y = temp_y + t * dy;
+                            if hit_y >= 0.0 && hit_y <= temp_h {
+                                min_t = min_t.min(t);
+                            }
+                        }
+                    }
+                    // Right wall (x=temp_w)
+                    if dx.abs() > 1e-6 {
+                        let t = (temp_w - temp_x) / dx;
+                        if t > 0.0 {
+                            let hit_y = temp_y + t * dy;
+                            if hit_y >= 0.0 && hit_y <= temp_h {
+                                min_t = min_t.min(t);
+                            }
+                        }
+                    }
+                    // Bottom wall (y=0)
+                    if dy.abs() > 1e-6 {
+                        let t = (0.0 - temp_y) / dy;
+                        if t > 0.0 {
+                            let hit_x = temp_x + t * dx;
+                            if hit_x >= 0.0 && hit_x <= temp_w {
+                                min_t = min_t.min(t);
+                            }
+                        }
+                    }
+                    // Top wall (y=temp_h)
+                    if dy.abs() > 1e-6 {
+                        let t = (temp_h - temp_y) / dy;
+                        if t > 0.0 {
+                            let hit_x = temp_x + t * dx;
+                            if hit_x >= 0.0 && hit_x <= temp_w {
+                                min_t = min_t.min(t);
+                            }
+                        }
+                    }
+                    if min_t.is_infinite() {
+                        error += 1000.0;
+                    } else {
+                        let diff = observed - min_t;
+                        if diff > 20.0 {
+                            error += (diff - 20.0).powi(2);
+                        }
+                        valid_samples += 1;
+                    }
+                }
+
+                if valid_samples >= 6 && error < best_error {
+                    best_error = error;
+                    best_k = k;
+                    best_d_left = d_left;
+                    best_d_right = d_right;
+                    best_d_bottom = d_bottom;
+                    best_d_top = d_top;
+                    best_temp_x = temp_x;
+                    best_temp_y = temp_y;
+                    best_temp_w = temp_w;
+                    best_temp_h = temp_h;
+                }
+            }
+
+            let error_threshold = 400.0;
+            if best_error < error_threshold {
+                // Stabilize best_k using previous (symmetry-aware)
+                if let Some(prev_k) = self.prev_best_k {
+                    let symmetry = NUM_BINS / 4; // 22
+                    let mut min_diff = i32::MAX;
+                    let mut adjusted_k = best_k;
+                    for rot in -2..3 {
+                        let candidate = ((best_k as i32 + rot * symmetry as i32)
+                            .rem_euclid(NUM_BINS as i32))
+                            as usize;
+                        let diff = (candidate as i32 - prev_k as i32).abs();
+                        let wrapped = diff.min(NUM_BINS as i32 - diff);
+                        if wrapped < min_diff {
+                            min_diff = wrapped;
+                            adjusted_k = candidate;
+                        }
+                    }
+                    if debug {
+                        println!(
+                            "Adjusted k from {} to {} (prev {})",
+                            best_k, adjusted_k, prev_k
+                        );
+                    }
+                    best_k = adjusted_k;
+                }
+                self.prev_best_k = Some(best_k);
+
+                // Update arena size smoothed
+                if self.arena_w == 0.0 {
+                    self.arena_w = best_temp_w;
+                    self.arena_h = best_temp_h;
+                } else {
+                    self.arena_w = 0.9 * self.arena_w + 0.1 * best_temp_w;
+                    self.arena_h = 0.9 * self.arena_h + 0.1 * best_temp_h;
+                }
+
+                // Update position
+                self.pos_x = best_temp_x;
+                self.pos_y = best_temp_y;
+
+                // Velocity
+                if let Some(last_ts) = self.last_pos_ts {
+                    let dt = (self.last_ts.unwrap() - last_ts) as f32 / 1_000_000.0;
+                    if dt > 0.01 {
+                        self.velocity = (
+                            (self.pos_x - self.last_pos_x) / dt,
+                            (self.pos_y - self.last_pos_y) / dt,
+                        );
+                    }
+                }
+                self.last_pos_x = self.pos_x;
+                self.last_pos_y = self.pos_y;
+                self.last_pos_ts = self.last_ts;
+
+                // Open space to center
+                let center_x = self.arena_w / 2.0;
+                let center_y = self.arena_h / 2.0;
+                open_space = (center_x - self.pos_x, center_y - self.pos_y);
+
+                // Wall distances
+                wall_distances = (best_d_left, best_d_right, best_d_bottom, best_d_top);
+            } // else fallback open_space already set
+        }
+
+        DetectionResult {
+            closest_wall,
+            open_space,
+            object_pos,
+            wall_distances,
+            position: (self.pos_x, self.pos_y),
+            velocity: self.velocity,
+        }
     }
 
     pub fn reset(&mut self) {

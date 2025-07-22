@@ -310,8 +310,9 @@ pub mod kasari {
                 if last_ts - self.last_planner_ts >= 100_000 {
                     self.last_planner_ts = last_ts;
 
+                    let result = self.detector.detect_objects(false);
                     let (closest_wall, open_space, object_pos) =
-                        self.detector.detect_objects(false);
+                        (result.closest_wall, result.open_space, result.object_pos);
                     self.latest_closest_wall = closest_wall;
                     self.latest_open_space = open_space;
                     self.latest_object_pos = object_pos;

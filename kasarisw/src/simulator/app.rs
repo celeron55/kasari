@@ -179,7 +179,9 @@ impl eframe::App for MyApp {
         }
 
         // Object detection
-        let (closest_wall, open_space, object_pos) = self.logic.detector.detect_objects(self.debug);
+        let result = self.logic.detector.detect_objects(self.debug);
+        let (closest_wall, open_space, object_pos) =
+            (result.closest_wall, result.open_space, result.object_pos);
 
         if self.debug && processed_events {
             println!("Simulator: ts={} theta={:.4} rpm={:.2} cw=({:.1},{:.1}) os=({:.1},{:.1}) op=({:.1},{:.1})",
