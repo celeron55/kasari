@@ -17,6 +17,12 @@ use std::iter::Iterator;
 pub trait EventSource {
     fn peek_next_ts(&mut self) -> Option<u64>;
     fn get_next_event(&mut self) -> Option<InputEvent>;
+    fn get_robot(&self) -> Option<&Robot> {
+        None
+    }
+    fn get_world(&self) -> Option<&World> {
+        None
+    }
 }
 
 pub struct FileEventSource {
@@ -354,5 +360,13 @@ impl EventSource for SimEventSource {
     fn get_next_event(&mut self) -> Option<InputEvent> {
         self.ensure_buffer_has_event();
         self.event_buffer.pop_front()
+    }
+
+    fn get_robot(&self) -> Option<&Robot> {
+        Some(&self.robot)
+    }
+
+    fn get_world(&self) -> Option<&World> {
+        Some(&self.world)
     }
 }
