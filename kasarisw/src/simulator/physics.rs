@@ -132,7 +132,7 @@ impl Robot {
         let rotated_x = movement_x * cos_off - movement_y * sin_off;
         let rotated_y = movement_x * sin_off + movement_y * cos_off;
 
-        let accel_const = 2000.0; // mm/s² per unit mag
+        let accel_const = 1000.0; // mm/s² per unit mag
         let drag_const = 3.0; // 3/s
         let accel_x = accel_const * rotated_x;
         let accel_y = accel_const * rotated_y;
@@ -148,9 +148,9 @@ impl Robot {
         self.pos_y += self.vel_y * dt;
 
         const HALF_SIZE: f32 = 70.0;
-        const ELASTICITY: f32 = 0.9;
-        const TANGENTIAL_KICK: f32 = 1.5;
-        const KICK_RPM_FACTOR: f32 = 0.25;
+        const ELASTICITY: f32 = 0.5;
+        const TANGENTIAL_KICK: f32 = 0.8;
+        const KICK_RPM_FACTOR: f32 = 0.3;
 
         // Handle arena collisions
         let mut robot_min_x = self.pos_x - HALF_SIZE;
