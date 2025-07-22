@@ -148,7 +148,7 @@ pub mod kasari {
                 last_planner_ts: 0,
                 autonomous_enabled: false,
                 autonomous_start_ts: None,
-                autonomous_cycle_period_us: 6_000_000, // 6 seconds
+                autonomous_cycle_period_us: 8_000_000, // 8 seconds
                 autonomous_duty_cycle: 0.5,            // 50% towards center, 50% towards object
             }
         }
@@ -301,15 +301,15 @@ pub mod kasari {
                     let cycle_ts = ts - self.autonomous_start_ts.unwrap();
                     let phase = (cycle_ts % self.autonomous_cycle_period_us) as f32
                         / self.autonomous_cycle_period_us as f32;
-                    let (target_x, target_y) = if phase < self.autonomous_duty_cycle {
+                    let ((target_x, target_y), speed_suggestion) = if phase < self.autonomous_duty_cycle {
                         // Towards center
-                        self.latest_open_space
+                        (self.latest_open_space, 0.5)
                     } else {
                         // Towards object
-                        self.latest_object_pos
+                        (self.latest_object_pos, 1.0)
                     };
                     let target_len = sqrtf(target_x * target_x + target_y * target_y);
-                    let intended_speed = if target_len > 0.0 { 1.0 } else { 0.0 };
+                    let intended_speed = if target_len > 0.0 { speed_suggestion } else { 0.0 };
                     let intended_x = if target_len > 0.0 {
                         target_x / target_len * intended_speed
                     } else {
