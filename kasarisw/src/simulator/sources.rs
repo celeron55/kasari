@@ -214,7 +214,13 @@ pub struct SimEventSource {
 }
 
 impl SimEventSource {
-    pub fn new(lidar_distance_offset: f32, debug: bool) -> Self {
+    pub fn new(
+        lidar_distance_offset: f32,
+        debug: bool,
+        arena_width: f32,
+        arena_height: f32,
+        no_object: bool,
+    ) -> Self {
         let channel = &*CHANNEL.init(PubSubChannel::new());
         let mut source = Self {
             control_logic: MainLogic::new(),
@@ -232,17 +238,21 @@ impl SimEventSource {
             },
             world: World {
                 arena: Rect {
-                    min_x: -600.0,
-                    min_y: -600.0,
-                    max_x: 600.0,
-                    max_y: 600.0,
+                    min_x: -arena_width / 2.0,
+                    min_y: -arena_height / 2.0,
+                    max_x: arena_width / 2.0,
+                    max_y: arena_height / 2.0,
                 },
-                objects: vec![Rect {
-                    min_x: 200.0,
-                    min_y: 200.0,
-                    max_x: 300.0,
-                    max_y: 300.0,
-                }],
+                objects: if !no_object {
+                    vec![Rect {
+                        min_x: 200.0,
+                        min_y: 200.0,
+                        max_x: 300.0,
+                        max_y: 300.0,
+                    }]
+                } else {
+                    vec![]
+                },
             },
             last_advance_ts: 0,
             last_step_ts: 0,

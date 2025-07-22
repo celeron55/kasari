@@ -34,9 +34,18 @@ impl MyApp {
         inject_autonomous: bool,
         lidar_distance_offset: f32,
         sim_mode: bool,
+        arena_width: f32,
+        arena_height: f32,
+        object_present: bool,
     ) -> Self {
         let event_source: Box<dyn EventSource> = if sim_mode {
-            Box::new(SimEventSource::new(lidar_distance_offset, debug))
+            Box::new(SimEventSource::new(
+                lidar_distance_offset,
+                debug,
+                arena_width,
+                arena_height,
+                object_present,
+            ))
         } else {
             Box::new(FileEventSource::new(
                 lines,

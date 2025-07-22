@@ -34,6 +34,18 @@ struct Args {
     /// Run in true simulation mode (ignores source)
     #[arg(long, short)]
     sim: bool,
+
+    /// Arena width in mm (simulation only)
+    #[arg(long, default_value_t = 1200.0)]
+    arena_width: f32,
+
+    /// Arena height in mm (simulation only)
+    #[arg(long, default_value_t = 1200.0)]
+    arena_height: f32,
+
+    /// Whether to include the object in the arena (simulation only)
+    #[arg(long)]
+    no_object: bool,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -73,6 +85,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 args.inject_autonomous,
                 args.lidar_distance_offset,
                 args.sim,
+                args.arena_width,
+                args.arena_height,
+                args.no_object,
             )))
         }),
     )?;
