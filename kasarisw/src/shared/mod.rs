@@ -351,7 +351,8 @@ pub mod kasari {
                     let intended_y = if target_len > 0.0 { target_y / target_len * intended_speed } else { 0.0 };
 
                     // Cancel unwanted velocity
-                    let vel_x = self.latest_velocity.0;
+                    // NOTE: This doesn't work properly so it is commented out
+                    /*let vel_x = self.latest_velocity.0;
                     let vel_y = self.latest_velocity.1;
                     let vel_mag = sqrtf(vel_x * vel_x + vel_y * vel_y);
                     if vel_mag > 0.0 {
@@ -359,16 +360,16 @@ pub mod kasari {
                         let proj = intended_dot_vel / (vel_mag * intended_speed);
                         let unwanted_vel_x = vel_x - proj * intended_x;
                         let unwanted_vel_y = vel_y - proj * intended_y;
-                        let k = 0.3; // Reduced gain for correction
-                        movement_x = intended_x - k * unwanted_vel_x / vel_mag;
-                        movement_y = intended_y - k * unwanted_vel_y / vel_mag;
+                        let gain = 0.5;
+                        movement_x = intended_x - gain * unwanted_vel_x / vel_mag;
+                        movement_y = intended_y - gain * unwanted_vel_y / vel_mag;
                         // Re-normalize
                         let new_len = sqrtf(movement_x * movement_x + movement_y * movement_y);
                         if new_len > 0.0 {
                             movement_x /= new_len;
                             movement_y /= new_len;
                         }
-                    } else {
+                    } else*/ {
                         movement_x = intended_x;
                         movement_y = intended_y;
                     }

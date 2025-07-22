@@ -112,9 +112,10 @@ impl Robot {
         self.theta += (self.rpm / 60.0 * 2.0 * PI) * dt;
         self.theta = rem_euclid_f32(self.theta, 2.0 * PI);
 
-        // No idea why this has to be pi/4 but that's what it has to be for the
-        // robot to move towards the target direction in the simulator
-        // TODO: Test whether real hardware behaves the same
+        // TODO: This doesn't actually work. The required offset changes every
+        // time the robot is simulated to lose ObjectDetector theta sync with
+        // the world, for example in collisions with arena walls
+        // Initially before any collisions occur, pi/4 works here as the offset.
         const TARGET_MOVEMENT_ANGLE_OFFSET: f32 = PI / 4.0;
         let cos_off = cosf(TARGET_MOVEMENT_ANGLE_OFFSET);
         let sin_off = sinf(TARGET_MOVEMENT_ANGLE_OFFSET);
@@ -128,11 +129,18 @@ impl Robot {
         self.vel_x += (accel_x - self.vel_x * drag_const) * dt;
         self.vel_y += (accel_y - self.vel_y * drag_const) * dt;
 
+        // Limit velocity to keep the collision checks working with the fixed
+        // time step
+        self.vel_x = self.vel_x.max(-20000.0).min(20000.0);
+        self.vel_y = self.vel_y.max(-20000.0).min(20000.0);
+
         self.pos_x += self.vel_x * dt;
         self.pos_y += self.vel_y * dt;
 
         const HALF_SIZE: f32 = 70.0;
-        const ELASTICITY: f32 = 0.5;
+        const ELASTICITY: f32 = 0.9;
+        const TANGENTIAL_KICK: f32 = 4.0;
+        const KICK_RPM_FACTOR: f32 = 0.2;
 
         // Handle arena collisions
         let mut robot_min_x = self.pos_x - HALF_SIZE;
@@ -144,21 +152,29 @@ impl Robot {
             let pen = world.arena.min_x - robot_min_x;
             self.pos_x += pen;
             self.vel_x = -self.vel_x * ELASTICITY;
+            self.vel_y += self.rpm * TANGENTIAL_KICK;
+            self.rpm *= KICK_RPM_FACTOR;
         }
         if robot_max_x > world.arena.max_x {
             let pen = robot_max_x - world.arena.max_x;
             self.pos_x -= pen;
             self.vel_x = -self.vel_x * ELASTICITY;
+            self.vel_y -= self.rpm * TANGENTIAL_KICK;
+            self.rpm *= KICK_RPM_FACTOR;
         }
         if robot_min_y < world.arena.min_y {
             let pen = world.arena.min_y - robot_min_y;
             self.pos_y += pen;
             self.vel_y = -self.vel_y * ELASTICITY;
+            self.vel_x -= self.rpm * TANGENTIAL_KICK;
+            self.rpm *= KICK_RPM_FACTOR;
         }
         if robot_max_y > world.arena.max_y {
             let pen = robot_max_y - world.arena.max_y;
             self.pos_y -= pen;
             self.vel_y = -self.vel_y * ELASTICITY;
+            self.vel_x += self.rpm * TANGENTIAL_KICK;
+            self.rpm *= KICK_RPM_FACTOR;
         }
 
         // Update robot bounds after arena collision
@@ -212,9 +228,13 @@ impl Robot {
 
                 if normal_x != 0.0 {
                     self.vel_x = -self.vel_x * ELASTICITY;
+                    self.vel_y += normal_x * self.rpm * TANGENTIAL_KICK;
+                    self.rpm *= KICK_RPM_FACTOR;
                 }
                 if normal_y != 0.0 {
                     self.vel_y = -self.vel_y * ELASTICITY;
+                    self.vel_x -= normal_y * self.rpm * TANGENTIAL_KICK;
+                    self.rpm *= KICK_RPM_FACTOR;
                 }
 
                 // Update bounds for potential next objects
