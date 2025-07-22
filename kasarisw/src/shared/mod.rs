@@ -15,7 +15,7 @@ use embassy_time::Instant;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub mod algorithm;
-use algorithm::ObjectDetector;
+use algorithm::{DetectionResult, ObjectDetector};
 
 pub const MAX_RPM_RAMP_RATE: f32 = 2000.0; // rpm/s
 
@@ -115,9 +115,14 @@ pub mod kasari {
         pub latest_closest_wall: (f32, f32),
         pub latest_open_space: (f32, f32),
         pub latest_object_pos: (f32, f32),
+        pub latest_wall_distances: (f32, f32, f32, f32),
+        pub latest_position: (f32, f32),
+        pub latest_velocity: (f32, f32),
         last_planner_ts: u64,
         autonomous_enabled: bool,
         autonomous_start_ts: Option<u64>,
+        autonomous_cycle_period_us: u64,
+        autonomous_duty_cycle: f32,
     }
 
     impl MainLogic {
@@ -137,9 +142,14 @@ pub mod kasari {
                 latest_closest_wall: (0.0, 0.0),
                 latest_open_space: (0.0, 0.0),
                 latest_object_pos: (0.0, 0.0),
+                latest_wall_distances: (0.0, 0.0, 0.0, 0.0),
+                latest_position: (0.0, 0.0),
+                latest_velocity: (0.0, 0.0),
                 last_planner_ts: 0,
                 autonomous_enabled: false,
                 autonomous_start_ts: None,
+                autonomous_cycle_period_us: 6_000_000, // 6 seconds
+                autonomous_duty_cycle: 0.5,            // 50% towards center, 50% towards object
             }
         }
 
@@ -252,8 +262,7 @@ pub mod kasari {
             }
         }
 
-        pub fn autonomous_update(&mut self) {
-            let ts = get_current_timestamp();
+        pub fn autonomous_update(&mut self, ts: u64) {
             if !self.vbat_ok {
                 self.motor_control_plan = None;
                 return;
@@ -271,23 +280,68 @@ pub mod kasari {
                 let obj_y = self.latest_object_pos.1;
                 let obj_dist = sqrtf(obj_x * obj_x + obj_y * obj_y);
 
-                if wall_dist < 250.0 && wall_dist < obj_dist - 100.0 {
+                let detection_failing = self.detector.arena_w == 0.0 || obj_x == 100.0;
+
+                if detection_failing {
+                    // Fallback: move away from closest wall towards open space
                     let away_x = -wall_x;
                     let away_y = -wall_y;
-                    let target_x = (away_x + self.latest_open_space.0 + obj_x) / 3.0;
-                    let target_y = (away_y + self.latest_open_space.1 + obj_y) / 3.0;
+                    let target_x = (away_x + self.latest_open_space.0) / 2.0;
+                    let target_y = (away_y + self.latest_open_space.1) / 2.0;
                     let target_len = sqrtf(target_x * target_x + target_y * target_y);
                     if target_len > 0.0 {
-                        movement_x = target_x / target_len * 0.5;
-                        movement_y = target_y / target_len * 0.5;
+                        movement_x = target_x / target_len * 1.0;
+                        movement_y = target_y / target_len * 1.0;
                     }
                 } else {
-                    if obj_x != 100.0 || obj_y != 100.0 {
-                        let obj_dist = sqrtf(obj_x * obj_x + obj_y * obj_y);
-                        if obj_dist > 0.0 {
-                            movement_x = obj_x / obj_dist * 1.0;
-                            movement_y = obj_y / obj_dist * 1.0;
+                    // Normal mode: alternate between center and object
+                    if self.autonomous_start_ts.is_none() {
+                        self.autonomous_start_ts = Some(ts);
+                    }
+                    let cycle_ts = ts - self.autonomous_start_ts.unwrap();
+                    let phase = (cycle_ts % self.autonomous_cycle_period_us) as f32
+                        / self.autonomous_cycle_period_us as f32;
+                    let (target_x, target_y) = if phase < self.autonomous_duty_cycle {
+                        // Towards center
+                        self.latest_open_space
+                    } else {
+                        // Towards object
+                        self.latest_object_pos
+                    };
+                    let target_len = sqrtf(target_x * target_x + target_y * target_y);
+                    let intended_speed = if target_len > 0.0 { 1.0 } else { 0.0 };
+                    let intended_x = if target_len > 0.0 {
+                        target_x / target_len * intended_speed
+                    } else {
+                        0.0
+                    };
+                    let intended_y = if target_len > 0.0 {
+                        target_y / target_len * intended_speed
+                    } else {
+                        0.0
+                    };
+
+                    // Cancel unwanted velocity
+                    let vel_x = self.latest_velocity.0;
+                    let vel_y = self.latest_velocity.1;
+                    let vel_mag = sqrtf(vel_x * vel_x + vel_y * vel_y);
+                    if vel_mag > 0.0 {
+                        let intended_dot_vel = intended_x * vel_x + intended_y * vel_y;
+                        let proj = intended_dot_vel / (vel_mag * intended_speed);
+                        let unwanted_vel_x = vel_x - proj * intended_x;
+                        let unwanted_vel_y = vel_y - proj * intended_y;
+                        let k = 0.3; // Reduced gain for correction
+                        movement_x = intended_x - k * unwanted_vel_x / vel_mag;
+                        movement_y = intended_y - k * unwanted_vel_y / vel_mag;
+                        // Re-normalize
+                        let new_len = sqrtf(movement_x * movement_x + movement_y * movement_y);
+                        if new_len > 0.0 {
+                            movement_x /= new_len;
+                            movement_y /= new_len;
                         }
+                    } else {
+                        movement_x = intended_x;
+                        movement_y = intended_y;
                     }
                 }
             }
@@ -311,23 +365,24 @@ pub mod kasari {
                     self.last_planner_ts = last_ts;
 
                     let result = self.detector.detect_objects(false);
-                    let (closest_wall, open_space, object_pos) =
-                        (result.closest_wall, result.open_space, result.object_pos);
-                    self.latest_closest_wall = closest_wall;
-                    self.latest_open_space = open_space;
-                    self.latest_object_pos = object_pos;
+                    self.latest_closest_wall = result.closest_wall;
+                    self.latest_open_space = result.open_space;
+                    self.latest_object_pos = result.object_pos;
+                    self.latest_wall_distances = result.wall_distances;
+                    self.latest_position = result.position;
+                    self.latest_velocity = result.velocity;
                     if LOG_DETECTION {
                         println!(
                             "Detected: Wall {:?}, Open {:?}, Object {:?} (bins={})",
-                            closest_wall,
-                            open_space,
-                            object_pos,
+                            result.closest_wall,
+                            result.open_space,
+                            result.object_pos,
                             self.detector.bin_count()
                         );
                     }
 
                     if self.autonomous_enabled {
-                        self.autonomous_update();
+                        self.autonomous_update(last_ts);
                     } else {
                         self.autonomous_start_ts = None;
                     }
@@ -346,9 +401,9 @@ pub mod kasari {
                         publisher.publish_immediate(InputEvent::Planner(
                             last_ts,
                             plan,
-                            closest_wall,
-                            open_space,
-                            object_pos,
+                            result.closest_wall,
+                            result.open_space,
+                            result.object_pos,
                             self.detector.theta,
                             self.detector.rpm,
                         ));
