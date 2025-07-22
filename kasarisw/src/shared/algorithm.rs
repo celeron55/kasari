@@ -142,7 +142,7 @@ impl ObjectDetector {
             Lidar(_, d1, d2, d3, d4) => {
                 let distances = [*d1, *d2, *d3, *d4];
                 let delta_theta = if self.rpm != 0.0 {
-                    0.00167 * ((self.rpm / 60.0) * 2.0 * PI)
+                    0.002083 * ((self.rpm / 60.0) * 2.0 * PI)
                 } else {
                     0.0
                 };
@@ -179,9 +179,18 @@ impl ObjectDetector {
                             }
                         }
                         let mut steps = delta as usize;
+                        // If it's more than half of all the bins, it's some
+                        // kind of a wrap-around and we don't want to be filling
+                        // any extras as a result
                         if steps > NUM_BINS / 2 {
                             steps = 0;
                         }
+                        // Fill in a maximum of a few bins. If it's more than
+                        // that, it could be a loss of data and it would just
+                        // end up drawing circles which don't represent anything
+                        // useful. In that case we'll leave in the old values
+                        // and hope the robot hasn't moved too much meanwhile
+                        steps = steps.min(5);
                         if steps > 1 {
                             if direction_forward {
                                 for k in 1..steps {
