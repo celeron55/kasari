@@ -128,6 +128,8 @@ pub mod kasari {
         autonomous_start_ts: Option<u64>,
         autonomous_cycle_period_us: u64,
         autonomous_duty_cycle: f32,
+        last_rpm_update_ts: Option<u64>,
+        current_rotation_speed: f32,
     }
 
     impl MainLogic {
@@ -155,11 +157,14 @@ pub mod kasari {
                 autonomous_start_ts: None,
                 autonomous_cycle_period_us: 5_000_000, // 5 seconds
                 autonomous_duty_cycle: 0.6,            // 60% towards center, 40% towards object
+                last_rpm_update_ts: None,
+                current_rotation_speed: 0.0,
             }
         }
 
         pub fn feed_event(&mut self, event: InputEvent) {
             self.detector.update(&event);
+            self.detector.rpm = self.detector.rpm.abs() * self.current_rotation_speed.signum();
 
             match event {
                 InputEvent::Lidar(_timestamp, _d1, _d2, _d3, _d4) => {
@@ -456,6 +461,32 @@ pub mod kasari {
                         self.autonomous_start_ts = None;
                     }
 
+                    if let Some(ref mut plan) = self.motor_control_plan {
+                        let dt = if let Some(last) = self.last_rpm_update_ts {
+                            ((last_ts - last) as f32) / 1_000_000.0
+                        } else {
+                            0.0
+                        };
+                        // Allow MAX_RPM_RAMP_RATE in change in RPM Tolerate
+                        // negative dt (sometimes happens)
+                        let max_rpm_delta = MAX_RPM_RAMP_RATE * dt.max(0.0);
+                        let target = plan.rotation_speed;
+                        self.current_rotation_speed += (target - self.current_rotation_speed)
+                            .clamp(-max_rpm_delta, max_rpm_delta);
+
+                        // Allow initial jump in RPM within RPM_INITIAL_JUMP
+                        let jump_to_if_needed = target.max(-RPM_INITIAL_JUMP).min(RPM_INITIAL_JUMP);
+                        if jump_to_if_needed.signum() != self.current_rotation_speed.signum()
+                            || (self.current_rotation_speed.abs() < RPM_INITIAL_JUMP
+                                && target.abs() > self.current_rotation_speed.abs())
+                        {
+                            self.current_rotation_speed = jump_to_if_needed;
+                        }
+
+                        plan.rotation_speed = self.current_rotation_speed;
+                    }
+                    self.last_rpm_update_ts = Some(last_ts);
+
                     let plan = if let Some(ref p) = self.motor_control_plan {
                         p.clone()
                     } else {
@@ -560,7 +591,6 @@ pub mod kasari {
         theta: f32,
         rpm: f32,
         pub mcp: Option<MotorControlPlan>,
-        pub current_rotation_speed: f32,
     }
 
     impl MotorModulator {
@@ -570,21 +600,21 @@ pub mod kasari {
                 theta: 0.0,
                 rpm: 0.0,
                 mcp: None,
-                current_rotation_speed: 0.0,
             }
         }
 
-        pub fn sync(&mut self, ts: u64, theta: f32, rpm: f32, plan: MotorControlPlan) {
+        pub fn sync(&mut self, ts: u64, theta: f32, plan: MotorControlPlan) {
             self.last_ts = ts;
             self.theta = theta;
-            self.rpm = rpm;
             self.mcp = Some(plan);
         }
 
         pub fn step(&mut self, ts: u64) -> (f32, f32) {
+            let base_rpm = self.mcp.as_ref().map_or(0.0, |p| p.rotation_speed);
+
             // Cast to i64 so that ts sometimes going backwards is fine
             let dt = (ts as i64 - self.last_ts as i64) as f32 / 1_000_000.0;
-            self.theta += self.rpm / 60.0 * 2.0 * PI * dt;
+            self.theta += base_rpm / 60.0 * 2.0 * PI * dt;
             self.theta = rem_euclid_f32(self.theta, 2.0 * PI);
             self.last_ts = ts;
 
@@ -598,26 +628,6 @@ pub mod kasari {
             let target_rotation_speed = self.mcp.as_ref().map_or(0.0, |p| p.rotation_speed);
             let target_movement_x = self.mcp.as_ref().map_or(0.0, |p| p.movement_x);
             let target_movement_y = self.mcp.as_ref().map_or(0.0, |p| p.movement_y);
-
-            // Allow MAX_RPM_RAMP_RATE in change in RPM
-            // Tolerate negative dt (sometimes happens)
-            let max_rpm_delta = (MAX_RPM_RAMP_RATE * dt).max(0.0);
-            self.current_rotation_speed += (target_rotation_speed - self.current_rotation_speed)
-                .clamp(-max_rpm_delta, max_rpm_delta);
-
-            // Allow initial jump in RPM within RPM_INITIAL_JUMP
-            let jump_to_if_needed = target_rotation_speed
-                .max(-RPM_INITIAL_JUMP)
-                .min(RPM_INITIAL_JUMP);
-            if jump_to_if_needed.is_sign_positive()
-                != self.current_rotation_speed.is_sign_positive()
-                || (self.current_rotation_speed.abs() < RPM_INITIAL_JUMP
-                    && target_rotation_speed.abs() > self.current_rotation_speed.abs())
-            {
-                self.current_rotation_speed = jump_to_if_needed;
-            }
-
-            let base_rpm = self.current_rotation_speed;
 
             let mag = sqrtf(
                 target_movement_x * target_movement_x + target_movement_y * target_movement_y,

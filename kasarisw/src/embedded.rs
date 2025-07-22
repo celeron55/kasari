@@ -423,7 +423,6 @@ async fn main(spawner: Spawner) {
                 modulator.sync(
                     embassy_time::Instant::now().as_ticks(),
                     logic.detector.theta,
-                    logic.detector.rpm,
                     plan.clone(),
                 );
             } else {

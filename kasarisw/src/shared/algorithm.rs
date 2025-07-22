@@ -71,15 +71,12 @@ impl ObjectDetector {
         }
     }
 
-    fn accel_to_rpm(&self, accel_g: f32) -> f32 {
+    pub fn accel_to_rpm(&self, accel_g: f32) -> f32 {
         let g = 9.81;
         let r = 0.0145;
         let a_calibrated = accel_g - self.accel_offset;
-        let a = a_calibrated * g;
-        let mut omega = sqrtf(fabsf(a) / r);
-        if a < 0.0 {
-            omega = -omega;
-        }
+        let a = a_calibrated.abs() * g;
+        let omega = sqrtf(a / r);
         (omega * 60.0) / (2.0 * PI)
     }
 
@@ -142,7 +139,7 @@ impl ObjectDetector {
             Lidar(_, d1, d2, d3, d4) => {
                 let distances = [*d1, *d2, *d3, *d4];
                 let delta_theta = if self.rpm != 0.0 {
-                    0.002083 * ((self.rpm / 60.0) * 2.0 * PI)
+                    0.002083 * ((self.rpm.abs() / 60.0) * 2.0 * PI)
                 } else {
                     0.0
                 };
@@ -158,7 +155,11 @@ impl ObjectDetector {
                         continue;
                     }
                     let angle = rem_euclid_f32(
-                        self.theta - ((distances.len() as f32 - i as f32 - 1.0) * step_theta),
+                        if direction_forward {
+                            self.theta - ((distances.len() as f32 - i as f32 - 1.0) * step_theta)
+                        } else {
+                            self.theta + ((distances.len() as f32 - i as f32 - 1.0) * step_theta)
+                        },
                         2.0 * PI,
                     );
                     let bin_idx = ((angle / BIN_ANGLE_STEP) as usize) % NUM_BINS;
@@ -166,17 +167,10 @@ impl ObjectDetector {
                     let y = d * sinf(angle);
                     self.last_xys.push((x, y));
                     if let Some(prev_idx) = self.last_bin_idx {
-                        let mut delta: i32;
-                        if direction_forward {
-                            delta = bin_idx as i32 - prev_idx as i32;
-                            if delta < 0 {
-                                delta += NUM_BINS as i32;
-                            }
-                        } else {
-                            delta = prev_idx as i32 - bin_idx as i32;
-                            if delta < 0 {
-                                delta += NUM_BINS as i32;
-                            }
+                        let mut delta: i32 =
+                            (bin_idx as i32 - prev_idx as i32).rem_euclid(NUM_BINS as i32);
+                        if !direction_forward {
+                            delta = (prev_idx as i32 - bin_idx as i32).rem_euclid(NUM_BINS as i32);
                         }
                         let mut steps = delta as usize;
                         // If it's more than half of all the bins, it's some

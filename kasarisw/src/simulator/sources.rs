@@ -281,7 +281,8 @@ impl SimEventSource {
         const MAX_RPM_CHANGE_PER_S: f32 = 2000.0; // Limited by wheel friction
         self.robot.rpm = self
             .modulator
-            .current_rotation_speed
+            .mcp
+            .map_or(0.0, |p| p.rotation_speed)
             .max(self.robot.rpm - MAX_RPM_CHANGE_PER_S * dt)
             .min(self.robot.rpm + MAX_RPM_CHANGE_PER_S * dt);
         let movement_x = self
@@ -379,7 +380,7 @@ impl SimEventSource {
                     self.event_buffer.push_back(event.clone());
                     if let InputEvent::Planner(ts, plan, _, _, _, _, _) = &event {
                         self.modulator
-                            .sync(*ts, self.robot.theta, self.robot.rpm, plan.clone());
+                            .sync(*ts, self.robot.theta, plan.clone());
                     }
                 }
                 self.last_step_ts = next_step;
