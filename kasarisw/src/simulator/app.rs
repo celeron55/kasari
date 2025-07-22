@@ -425,7 +425,7 @@ impl eframe::App for MyApp {
                     rects.push(robot_rect);
 
                     // Not sure where this error comes from
-                    let theta_off = 0.25;
+                    let theta_off = 0.17;
                     // This aligns the rectangles to the lidar plot
                     let d_theta = self.logic.detector.theta - robot.theta + theta_off;
 

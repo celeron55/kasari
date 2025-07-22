@@ -327,7 +327,7 @@ impl SimEventSource {
             if next_lidar <= next_ts {
                 let delta_t_sec = (next_lidar - self.last_lidar_ts) as f32 / 1_000_000.0;
                 let delta_theta = self.robot.rpm / 60.0 * 2.0 * PI * delta_t_sec;
-                let step_theta = delta_theta / 3.0;
+                let step_theta = delta_theta / 4.0;
                 let mut distances = [0.0; 4];
                 for i in 0..4 {
                     let angle =

@@ -115,7 +115,7 @@ impl ObjectDetector {
             Lidar(_, d1, d2, d3, d4) => {
                 let distances = [*d1, *d2, *d3, *d4];
                 let delta_theta = if self.rpm != 0.0 {
-                    0.00167 * ((self.rpm / 60.0) * 2.0 * PI)
+                    0.002083 * ((self.rpm / 60.0) * 2.0 * PI)
                 } else {
                     0.0
                 };
