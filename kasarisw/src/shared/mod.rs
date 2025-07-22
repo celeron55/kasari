@@ -149,7 +149,7 @@ pub mod kasari {
                 autonomous_enabled: false,
                 autonomous_start_ts: None,
                 autonomous_cycle_period_us: 5_000_000, // 5 seconds
-                autonomous_duty_cycle: 0.6, // 60% towards center, 40% towards object
+                autonomous_duty_cycle: 0.6,            // 60% towards center, 40% towards object
             }
         }
 
@@ -299,8 +299,12 @@ pub mod kasari {
                         self.autonomous_start_ts = Some(ts);
                     }
                     let cycle_ts = ts - self.autonomous_start_ts.unwrap();
-                    let phase = (cycle_ts % self.autonomous_cycle_period_us) as f32 / self.autonomous_cycle_period_us as f32;
-                    let (target_x, target_y) = if phase < self.autonomous_duty_cycle {
+                    let phase = (cycle_ts % self.autonomous_cycle_period_us) as f32
+                        / self.autonomous_cycle_period_us as f32;
+                    // Pick a target and a speed depending on what the target is
+                    let ((target_x, target_y), speed_suggestion) = if phase
+                        < self.autonomous_duty_cycle
+                    {
                         // Towards center
                         let center_x = self.latest_open_space.0;
                         let center_y = self.latest_open_space.1;
@@ -310,7 +314,8 @@ pub mod kasari {
                         // Check if object is nearly aligned with center
                         let angle_center = atan2f(center_y, center_x);
                         let angle_object = atan2f(obj_y, obj_x);
-                        let angle_diff = fabsf(rem_euclid_f32(angle_center - angle_object + PI, 2.0 * PI) - PI);
+                        let angle_diff =
+                            fabsf(rem_euclid_f32(angle_center - angle_object + PI, 2.0 * PI) - PI);
                         if angle_diff < PI / 4.0 && center_len > 0.0 && obj_len > 0.0 {
                             // Compute perpendicular vectors
                             let perp_x1 = -center_y;
@@ -329,26 +334,46 @@ pub mod kasari {
 
                             // Normalize perp
                             let perp_len = sqrtf(perp_x * perp_x + perp_y * perp_y);
-                            let norm_perp_x = if perp_len > 0.0 { perp_x / perp_len } else { 0.0 };
-                            let norm_perp_y = if perp_len > 0.0 { perp_y / perp_len } else { 0.0 };
+                            let norm_perp_x = if perp_len > 0.0 {
+                                perp_x / perp_len
+                            } else {
+                                0.0
+                            };
+                            let norm_perp_y = if perp_len > 0.0 {
+                                perp_y / perp_len
+                            } else {
+                                0.0
+                            };
 
                             // Blend
                             let k = 0.5; // Bias factor
                             let blended_x = center_x + k * norm_perp_x * center_len;
                             let blended_y = center_y + k * norm_perp_y * center_len;
-                            (blended_x, blended_y)
+                            ((blended_x, blended_y), 0.5)
                         } else {
                             // Not aligned, use center directly
-                            (center_x, center_y)
+                            ((center_x, center_y), 0.5)
                         }
                     } else {
                         // Towards object
-                        (obj_x, obj_y)
+                        ((obj_x, obj_y), 1.0)
                     };
                     let target_len = sqrtf(target_x * target_x + target_y * target_y);
-                    let intended_speed = if target_len > 0.0 { 1.0 } else { 0.0 };
-                    let intended_x = if target_len > 0.0 { target_x / target_len * intended_speed } else { 0.0 };
-                    let intended_y = if target_len > 0.0 { target_y / target_len * intended_speed } else { 0.0 };
+                    let intended_speed = if target_len > 0.0 {
+                        speed_suggestion
+                    } else {
+                        0.0
+                    };
+                    let intended_x = if target_len > 0.0 {
+                        target_x / target_len * intended_speed
+                    } else {
+                        0.0
+                    };
+                    let intended_y = if target_len > 0.0 {
+                        target_y / target_len * intended_speed
+                    } else {
+                        0.0
+                    };
 
                     // Cancel unwanted velocity
                     // NOTE: This doesn't work properly so it is commented out
@@ -369,7 +394,8 @@ pub mod kasari {
                             movement_x /= new_len;
                             movement_y /= new_len;
                         }
-                    } else*/ {
+                    } else*/
+                    {
                         movement_x = intended_x;
                         movement_y = intended_y;
                     }
