@@ -311,12 +311,14 @@ pub mod kasari {
                         let center_len = sqrtf(center_x * center_x + center_y * center_y);
                         let obj_len = sqrtf(obj_x * obj_x + obj_y * obj_y);
 
-                        // Check if object is nearly aligned with center
+                        // Check if object is nearly aligned with center and
+                        // closer than center, meaning we have to go around the
+                        // object in order to reach center
                         let angle_center = atan2f(center_y, center_x);
                         let angle_object = atan2f(obj_y, obj_x);
                         let angle_diff =
                             fabsf(rem_euclid_f32(angle_center - angle_object + PI, 2.0 * PI) - PI);
-                        if angle_diff < PI / 4.0 && center_len > 0.0 && obj_len > 0.0 {
+                        if obj_len < center_len && angle_diff < PI / 4.0 && center_len > 0.0 && obj_len > 0.0 {
                             // Compute perpendicular vectors
                             let perp_x1 = -center_y;
                             let perp_y1 = center_x;
