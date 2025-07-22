@@ -148,8 +148,8 @@ pub mod kasari {
                 last_planner_ts: 0,
                 autonomous_enabled: false,
                 autonomous_start_ts: None,
-                autonomous_cycle_period_us: 8_000_000, // 8 seconds
-                autonomous_duty_cycle: 0.5,            // 50% towards center, 50% towards object
+                autonomous_cycle_period_us: 5_000_000, // 5 seconds
+                autonomous_duty_cycle: 0.6, // 60% towards center, 40% towards object
             }
         }
 
@@ -299,27 +299,56 @@ pub mod kasari {
                         self.autonomous_start_ts = Some(ts);
                     }
                     let cycle_ts = ts - self.autonomous_start_ts.unwrap();
-                    let phase = (cycle_ts % self.autonomous_cycle_period_us) as f32
-                        / self.autonomous_cycle_period_us as f32;
-                    let ((target_x, target_y), speed_suggestion) = if phase < self.autonomous_duty_cycle {
+                    let phase = (cycle_ts % self.autonomous_cycle_period_us) as f32 / self.autonomous_cycle_period_us as f32;
+                    let (target_x, target_y) = if phase < self.autonomous_duty_cycle {
                         // Towards center
-                        (self.latest_open_space, 0.5)
+                        let center_x = self.latest_open_space.0;
+                        let center_y = self.latest_open_space.1;
+                        let center_len = sqrtf(center_x * center_x + center_y * center_y);
+                        let obj_len = sqrtf(obj_x * obj_x + obj_y * obj_y);
+
+                        // Check if object is nearly aligned with center
+                        let angle_center = atan2f(center_y, center_x);
+                        let angle_object = atan2f(obj_y, obj_x);
+                        let angle_diff = fabsf(rem_euclid_f32(angle_center - angle_object + PI, 2.0 * PI) - PI);
+                        if angle_diff < PI / 4.0 && center_len > 0.0 && obj_len > 0.0 {
+                            // Compute perpendicular vectors
+                            let perp_x1 = -center_y;
+                            let perp_y1 = center_x;
+                            let perp_x2 = center_y;
+                            let perp_y2 = -center_x;
+
+                            // Choose the one farther from object
+                            let dot1 = perp_x1 * obj_x + perp_y1 * obj_y;
+                            let dot2 = perp_x2 * obj_x + perp_y2 * obj_y;
+                            let (perp_x, perp_y) = if dot1.abs() > dot2.abs() {
+                                (perp_x1, perp_y1)
+                            } else {
+                                (perp_x2, perp_y2)
+                            };
+
+                            // Normalize perp
+                            let perp_len = sqrtf(perp_x * perp_x + perp_y * perp_y);
+                            let norm_perp_x = if perp_len > 0.0 { perp_x / perp_len } else { 0.0 };
+                            let norm_perp_y = if perp_len > 0.0 { perp_y / perp_len } else { 0.0 };
+
+                            // Blend
+                            let k = 0.5; // Bias factor
+                            let blended_x = center_x + k * norm_perp_x * center_len;
+                            let blended_y = center_y + k * norm_perp_y * center_len;
+                            (blended_x, blended_y)
+                        } else {
+                            // Not aligned, use center directly
+                            (center_x, center_y)
+                        }
                     } else {
                         // Towards object
-                        (self.latest_object_pos, 1.0)
+                        (obj_x, obj_y)
                     };
                     let target_len = sqrtf(target_x * target_x + target_y * target_y);
-                    let intended_speed = if target_len > 0.0 { speed_suggestion } else { 0.0 };
-                    let intended_x = if target_len > 0.0 {
-                        target_x / target_len * intended_speed
-                    } else {
-                        0.0
-                    };
-                    let intended_y = if target_len > 0.0 {
-                        target_y / target_len * intended_speed
-                    } else {
-                        0.0
-                    };
+                    let intended_speed = if target_len > 0.0 { 1.0 } else { 0.0 };
+                    let intended_x = if target_len > 0.0 { target_x / target_len * intended_speed } else { 0.0 };
+                    let intended_y = if target_len > 0.0 { target_y / target_len * intended_speed } else { 0.0 };
 
                     // Cancel unwanted velocity
                     let vel_x = self.latest_velocity.0;
