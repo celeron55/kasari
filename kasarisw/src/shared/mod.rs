@@ -17,6 +17,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub mod algorithm;
 use algorithm::{DetectionResult, ObjectDetector};
 
+pub const TARGET_RPM: f32 = 1000.0;
+pub const MIN_MOVE_RPM: f32 = 550.0;
+pub const MIN_ATTACK_RPM: f32 = 800.0;
+
 pub const MAX_RPM_RAMP_RATE: f32 = 2000.0; // rpm/s
 pub const RPM_INITIAL_JUMP: f32 = 500.0; // rpm
 
@@ -64,7 +68,7 @@ pub mod kasari {
     use crate::shared::ObjectDetector;
     use crate::shared::{
         get_current_timestamp, LOG_DETECTION, LOG_RECEIVER, LOG_VBAT, LOG_WIFI_CONTROL,
-        MAX_RPM_RAMP_RATE, RPM_INITIAL_JUMP,
+        MAX_RPM_RAMP_RATE, MIN_ATTACK_RPM, MIN_MOVE_RPM, RPM_INITIAL_JUMP, TARGET_RPM,
     };
     #[cfg(target_os = "none")]
     use alloc::vec::Vec;
@@ -269,12 +273,12 @@ pub mod kasari {
                 self.motor_control_plan = None;
                 return;
             }
-            let rotation_speed = 1000.0;
+            let rotation_speed = TARGET_RPM;
 
             let mut movement_x = 0.0;
             let mut movement_y = 0.0;
 
-            if fabsf(self.detector.rpm) >= 550.0 {
+            if fabsf(self.detector.rpm) >= MIN_MOVE_RPM {
                 let wall_x = self.latest_closest_wall.0;
                 let wall_y = self.latest_closest_wall.1;
                 let wall_dist = sqrtf(wall_x * wall_x + wall_y * wall_y);
@@ -292,8 +296,8 @@ pub mod kasari {
                     let target_y = (away_y + self.latest_open_space.1) / 2.0;
                     let target_len = sqrtf(target_x * target_x + target_y * target_y);
                     if target_len > 0.0 {
-                        movement_x = target_x / target_len * 0.5;
-                        movement_y = target_y / target_len * 0.5;
+                        movement_x = target_x / target_len * 1.0;
+                        movement_y = target_y / target_len * 1.0;
                     }
                 } else {
                     // Normal mode: alternate between center and object
@@ -306,6 +310,7 @@ pub mod kasari {
                     // Pick a target and a speed depending on what the target is
                     let ((target_x, target_y), speed_suggestion) = if phase
                         < self.autonomous_duty_cycle
+                        || fabsf(self.detector.rpm) < MIN_ATTACK_RPM
                     {
                         // Towards center
                         let center_x = self.latest_open_space.0;
@@ -357,14 +362,14 @@ pub mod kasari {
                             let k = 0.5; // Bias factor
                             let blended_x = center_x + k * norm_perp_x * center_len;
                             let blended_y = center_y + k * norm_perp_y * center_len;
-                            ((blended_x, blended_y), 0.5)
+                            ((blended_x, blended_y), 1.0)
                         } else {
                             // Not aligned, use center directly
-                            ((center_x, center_y), 0.5)
+                            ((center_x, center_y), 1.0)
                         }
                     } else {
                         // Towards object
-                        ((obj_x, obj_y), 1.0)
+                        ((obj_x, obj_y), 2.0)
                     };
                     let target_len = sqrtf(target_x * target_x + target_y * target_y);
                     let intended_speed = if target_len > 0.0 {
