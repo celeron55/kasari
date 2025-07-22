@@ -290,8 +290,8 @@ pub mod kasari {
                     let target_y = (away_y + self.latest_open_space.1) / 2.0;
                     let target_len = sqrtf(target_x * target_x + target_y * target_y);
                     if target_len > 0.0 {
-                        movement_x = target_x / target_len * 1.0;
-                        movement_y = target_y / target_len * 1.0;
+                        movement_x = target_x / target_len * 0.5;
+                        movement_y = target_y / target_len * 0.5;
                     }
                 } else {
                     // Normal mode: alternate between center and object
