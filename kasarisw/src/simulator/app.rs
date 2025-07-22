@@ -424,18 +424,23 @@ impl eframe::App for MyApp {
                     };
                     rects.push(robot_rect);
 
-                    // Not sure where this error comes from
-                    let theta_off = 0.17;
+                    // Compensate for some kind of constant time lag. I'm not
+                    // sure where this comes from but this describes the lag's
+                    // behavior at least between 500...2000rpm
+                    let rpm = self.logic.detector.rpm.abs();
+                    let delta_theta = 0.002083 * (rpm / 60.0 * 2.0 * std::f32::consts::PI);
+                    let theta_off = 0.75 * delta_theta;
+
                     // This aligns the rectangles to the lidar plot
-                    let d_theta = self.logic.detector.theta - robot.theta + theta_off;
+                    let world_theta = self.logic.detector.theta - robot.theta + theta_off;
 
                     for r in rects {
                         let corners = vec![
-                            world_to_local(r.min_x, r.min_y, robot.pos_x, robot.pos_y, d_theta),
-                            world_to_local(r.max_x, r.min_y, robot.pos_x, robot.pos_y, d_theta),
-                            world_to_local(r.max_x, r.max_y, robot.pos_x, robot.pos_y, d_theta),
-                            world_to_local(r.min_x, r.max_y, robot.pos_x, robot.pos_y, d_theta),
-                            world_to_local(r.min_x, r.min_y, robot.pos_x, robot.pos_y, d_theta), // close the loop
+                            world_to_local(r.min_x, r.min_y, robot.pos_x, robot.pos_y, world_theta),
+                            world_to_local(r.max_x, r.min_y, robot.pos_x, robot.pos_y, world_theta),
+                            world_to_local(r.max_x, r.max_y, robot.pos_x, robot.pos_y, world_theta),
+                            world_to_local(r.min_x, r.max_y, robot.pos_x, robot.pos_y, world_theta),
+                            world_to_local(r.min_x, r.min_y, robot.pos_x, robot.pos_y, world_theta), // close the loop
                         ];
 
                         for i in 0..4 {
