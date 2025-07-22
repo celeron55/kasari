@@ -150,6 +150,10 @@ impl ObjectDetector {
                 let direction_forward = self.rpm >= 0.0;
                 self.last_xys.clear();
                 for (i, &d) in distances.iter().enumerate() {
+                    // NOTE: When the real LIDAR is operating in the real world,
+                    // we sometimes get failed points and we have to discard
+                    // those because we don't know whether they're very close or
+                    // very far
                     if !(70.0 < d && d < 1600.0) {
                         continue;
                     }
