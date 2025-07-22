@@ -363,7 +363,7 @@ impl ObjectDetector {
                 }
                 let mut sum_neighbor = 0.0;
                 let mut neighbor_count = 0.0;
-                for offset in 1..=3 {
+                for offset in 1..=5 {
                     let left = (n + i - offset) % n;
                     let right = (i + offset) % n;
                     if self.bins_dist[left].is_finite() {
