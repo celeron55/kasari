@@ -5,6 +5,7 @@ use crate::shared::rem_euclid_f32;
 use arrayvec::ArrayVec;
 use core::f32::consts::PI;
 use libm::{atan2f, cosf, fabsf, sinf, sqrtf};
+use num_traits::float::FloatCore;
 
 pub const NUM_BINS: usize = 90; // 4° per bin
 pub const BIN_ANGLE_STEP: f32 = 2.0 * PI / NUM_BINS as f32;
@@ -618,12 +619,6 @@ impl ObjectDetector {
                             min_diff = wrapped;
                             adjusted_k = candidate;
                         }
-                    }
-                    if debug {
-                        println!(
-                            "Adjusted k from {} to {} (prev {})",
-                            best_k, adjusted_k, prev_k
-                        );
                     }
                     best_k = adjusted_k;
                 }
