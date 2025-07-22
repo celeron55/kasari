@@ -43,6 +43,11 @@ pub struct ObjectDetector {
     last_pos_ts: Option<u64>,
     velocity: (f32, f32),
     prev_best_k: Option<usize>,
+    accel_z_offset: f32,
+    smoothed_accel_z: f32,
+    calibration_z_samples: ArrayVec<f32, CALIBRATION_COUNT>,
+    calibration_z_done: bool,
+    pub flipped: bool,
 }
 
 impl ObjectDetector {
@@ -68,6 +73,11 @@ impl ObjectDetector {
             last_pos_ts: None,
             velocity: (0.0, 0.0),
             prev_best_k: None,
+            accel_z_offset: 0.0,
+            smoothed_accel_z: 0.0,
+            calibration_z_samples: ArrayVec::new(),
+            calibration_z_done: false,
+            flipped: false,
         }
     }
 
@@ -88,10 +98,15 @@ impl ObjectDetector {
         // other and we only care about synchronizing to the lidar in order to
         // maintain angle accuracy, as angles are derived from timestamps.
         match event {
-            Accelerometer(_, ay, _) => {
+            Accelerometer(_, ay, az) => {
                 let raw_accel_y = *ay;
+                let raw_accel_z = az.clamp(-4.0, 4.0); // Clip to ±4g
                 self.smoothed_accel_y = 0.2 * raw_accel_y + 0.8 * self.smoothed_accel_y;
+                self.smoothed_accel_z = 0.05 * raw_accel_z + 0.95 * self.smoothed_accel_z; // Much stronger filtering
                 let accel_y = self.smoothed_accel_y;
+                let accel_z = self.smoothed_accel_z;
+
+                // Calibrate Y and Z offsets
                 if !self.calibration_done {
                     if CALIBRATION_MIN_G <= raw_accel_y && raw_accel_y <= CALIBRATION_MAX_G {
                         if self.calibration_samples.len() < CALIBRATION_COUNT {
@@ -104,6 +119,40 @@ impl ObjectDetector {
                         self.calibration_done = true;
                     }
                 }
+                if !self.calibration_z_done {
+                    if -4.0 <= raw_accel_z && raw_accel_z <= 4.0 {
+                        if self.calibration_z_samples.len() < CALIBRATION_COUNT {
+                            self.calibration_z_samples.push(raw_accel_z);
+                        }
+                    }
+                    if self.calibration_z_samples.len() >= CALIBRATION_COUNT {
+                        // Calibrate Z by assuming the value we should be seeing
+                        // is 1.0 G, which would mean the robot is upright
+                        self.accel_z_offset = self.calibration_z_samples.iter().sum::<f32>()
+                            / self.calibration_z_samples.len() as f32
+                            - 1.0;
+                        self.calibration_z_done = true;
+                    }
+                }
+
+                // Determine whether robot is flipped or not
+                if self.calibration_z_done {
+                    let corrected_z = accel_z - self.accel_z_offset;
+                    if corrected_z > 2.5 {
+                        // Was upside down during calibration, now upright
+                        self.accel_z_offset = self.accel_z_offset + 2.0; // Correct offset
+                        self.flipped = false;
+                    } else if corrected_z < 0.2 && self.flipped {
+                        // Currently upside down (hysteresis)
+                    } else if corrected_z < -0.2 {
+                        // Turned upside down
+                        self.flipped = true;
+                    } else {
+                        // Currently upright
+                        self.flipped = false;
+                    }
+                }
+
                 if self.calibration_done {
                     self.rpm = self.accel_to_rpm(accel_y);
                 }

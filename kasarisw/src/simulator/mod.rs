@@ -46,6 +46,10 @@ struct Args {
     /// Whether to include the object in the arena (simulation only)
     #[arg(long)]
     no_object: bool,
+
+    /// Whether to run the robot in the flipped state
+    #[arg(long)]
+    robot_flipped: bool,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -88,6 +92,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 args.arena_width,
                 args.arena_height,
                 args.no_object,
+                args.robot_flipped,
             )))
         }),
     )?;

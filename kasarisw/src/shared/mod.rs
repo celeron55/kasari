@@ -108,8 +108,6 @@ pub mod kasari {
     pub struct MainLogic {
         pub motor_control_plan: Option<MotorControlPlan>,
         pub detector: ObjectDetector,
-        acceleration_y: f32,
-        acceleration_z: f32,
         vbat: f32,
         vbat_ok: bool,
         pub battery_present: bool,
@@ -137,8 +135,6 @@ pub mod kasari {
             Self {
                 motor_control_plan: None,
                 detector: ObjectDetector::new(),
-                acceleration_y: 0.0,
-                acceleration_z: 0.0,
                 vbat: 0.0,
                 vbat_ok: false,
                 battery_present: false,
@@ -167,13 +163,8 @@ pub mod kasari {
             self.detector.rpm = self.detector.rpm.abs() * self.current_rotation_speed.signum();
 
             match event {
-                InputEvent::Lidar(_timestamp, _d1, _d2, _d3, _d4) => {
-                    self.detector.update(&event);
-                }
-                InputEvent::Accelerometer(_timestamp, a_y, a_z) => {
-                    self.acceleration_y = a_y;
-                    self.acceleration_z = a_z;
-                }
+                InputEvent::Lidar(_timestamp, _d1, _d2, _d3, _d4) => {}
+                InputEvent::Accelerometer(_timestamp, _a_y, _a_z) => {}
                 InputEvent::Receiver(timestamp, _ch, pulse_length) => {
                     // Mode 0 = RC Receiver control mode
                     if self.control_mode != 0 {
@@ -591,6 +582,7 @@ pub mod kasari {
         theta: f32,
         rpm: f32,
         pub mcp: Option<MotorControlPlan>,
+        flipped: bool,
     }
 
     impl MotorModulator {
@@ -600,13 +592,15 @@ pub mod kasari {
                 theta: 0.0,
                 rpm: 0.0,
                 mcp: None,
+                flipped: false,
             }
         }
 
-        pub fn sync(&mut self, ts: u64, theta: f32, plan: MotorControlPlan) {
+        pub fn sync(&mut self, ts: u64, theta: f32, plan: MotorControlPlan, flipped: bool) {
             self.last_ts = ts;
             self.theta = theta;
             self.mcp = Some(plan);
+            self.flipped = flipped;
         }
 
         pub fn step(&mut self, ts: u64) -> (f32, f32) {
@@ -637,11 +631,15 @@ pub mod kasari {
             }
 
             let phase = atan2f(target_movement_y, target_movement_x);
-            let mod_half = MODULATION_AMPLITUDE * mag * cosf(self.theta - phase);
 
-            let left_rpm = base_rpm - mod_half;
-            let right_rpm = base_rpm + mod_half;
-
+            let (left_rpm, right_rpm) = if self.flipped {
+                // Swap motors and negate modulation when flipped
+                let mod_half = -MODULATION_AMPLITUDE * mag * cosf(self.theta - phase);
+                (base_rpm - mod_half, base_rpm + mod_half)
+            } else {
+                let mod_half = MODULATION_AMPLITUDE * mag * cosf(self.theta - phase);
+                (base_rpm + mod_half, base_rpm - mod_half)
+            };
             (left_rpm, right_rpm)
         }
     }

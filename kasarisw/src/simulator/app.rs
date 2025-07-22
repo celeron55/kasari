@@ -37,6 +37,7 @@ impl MyApp {
         arena_width: f32,
         arena_height: f32,
         object_present: bool,
+        robot_flipped: bool,
     ) -> Self {
         let event_source: Box<dyn EventSource> = if sim_mode {
             Box::new(SimEventSource::new(
@@ -45,6 +46,7 @@ impl MyApp {
                 arena_width,
                 arena_height,
                 object_present,
+                robot_flipped,
             ))
         } else {
             Box::new(FileEventSource::new(
@@ -226,12 +228,13 @@ impl eframe::App for MyApp {
 
         egui::CentralPanel::default().show(ctx, |ui| {
             let heading_text = format!(
-                "Real-Time Robot LiDAR Simulation\nEvents: {}, TS: {} ms, Simulator RPM: {:.2}, Measured RPM: {:.2}, Target RPM: {:.2}",
+                "Real-Time Robot LiDAR Simulation\nEvents: {}, TS: {} ms, Simulator RPM: {:.2}, Measured RPM: {:.2}, Target RPM: {:.2}, flipped: {}",
                 self.current_event_idx,
                 self.logic.detector.last_ts.unwrap_or(0) / 1000,
                 self.logic.detector.rpm,
                 measured_rpm,
-                target_rpm
+                target_rpm,
+                self.logic.detector.flipped,
             );
             ui.heading(heading_text);
 
@@ -438,7 +441,7 @@ impl eframe::App for MyApp {
                     // Compensate for some kind of constant time lag. I'm not
                     // sure where this comes from but this describes the lag's
                     // behavior at least between 500...2000rpm
-                    let rpm = self.logic.detector.rpm.abs();
+                    let rpm = self.logic.detector.rpm;
                     let delta_theta = 0.002083 * (rpm / 60.0 * 2.0 * std::f32::consts::PI);
                     let theta_off = 0.75 * delta_theta;
 

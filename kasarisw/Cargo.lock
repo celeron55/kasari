@@ -2608,6 +2608,7 @@ dependencies = [
  "libm",
  "nb 1.1.0",
  "num-traits",
+ "rand",
  "ringbuffer",
  "serde_json",
  "static_cell",

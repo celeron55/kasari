@@ -424,6 +424,7 @@ async fn main(spawner: Spawner) {
                     embassy_time::Instant::now().as_ticks(),
                     logic.detector.theta,
                     plan.clone(),
+                    logic.detector.flipped,
                 );
             } else {
                 modulator.mcp = None;

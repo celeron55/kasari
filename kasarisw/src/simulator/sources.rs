@@ -6,6 +6,9 @@ use kasarisw::shared::algorithm::{BIN_ANGLE_STEP, NUM_BINS};
 use kasarisw::shared::kasari;
 use kasarisw::shared::kasari::{InputEvent, MainLogic, MotorControlPlan};
 use kasarisw::shared::rem_euclid_f32;
+use rand::distributions::Uniform;
+use rand::prelude::*;
+use rand::rngs::StdRng;
 use static_cell::StaticCell;
 use std::collections::VecDeque;
 use std::error::Error;
@@ -211,6 +214,9 @@ pub struct SimEventSource {
     last_lidar_ts: u64,
     lidar_distance_offset: f32,
     debug: bool,
+    robot_flipped: bool,
+    accelerometer_event_count: u64,
+    rng: StdRng,
 }
 
 impl SimEventSource {
@@ -220,6 +226,7 @@ impl SimEventSource {
         arena_width: f32,
         arena_height: f32,
         no_object: bool,
+        robot_flipped: bool,
     ) -> Self {
         let channel = &*CHANNEL.init(PubSubChannel::new());
         let mut source = Self {
@@ -262,6 +269,9 @@ impl SimEventSource {
             last_lidar_ts: 0,
             lidar_distance_offset,
             debug,
+            robot_flipped,
+            accelerometer_event_count: 0,
+            rng: StdRng::seed_from_u64(42),
         };
 
         // Initial events at ts=0
@@ -339,11 +349,19 @@ impl SimEventSource {
                 let omega = (self.robot.rpm / 60.0 * 2.0 * PI).abs();
                 let a_g = (omega * omega * 0.0145) / 9.81;
                 let ay = a_g;
-                let az = 0.0;
+                // Simulate gravity plus noise. Allow calibration to upright
+                // position during first 10 samples
+                let range = Uniform::from(-1.5..1.5);
+                let az = if self.robot_flipped && self.accelerometer_event_count > 10 {
+                    -1.0
+                } else {
+                    1.0
+                } + self.rng.sample(&range);
                 let event = InputEvent::Accelerometer(next_accel, ay, az);
                 self.event_buffer.push_back(event.clone());
                 self.control_logic.feed_event(event);
                 self.next_accel_ts += 10_000;
+                self.accelerometer_event_count += 1;
             }
 
             if next_lidar <= next_ts {
@@ -379,8 +397,12 @@ impl SimEventSource {
                 while let Some(event) = self.control_subscriber.try_next_message_pure() {
                     self.event_buffer.push_back(event.clone());
                     if let InputEvent::Planner(ts, plan, _, _, _, _, _) = &event {
-                        self.modulator
-                            .sync(*ts, self.robot.theta, plan.clone());
+                        self.modulator.sync(
+                            *ts,
+                            self.control_logic.detector.theta,
+                            plan.clone(),
+                            self.control_logic.detector.flipped,
+                        );
                     }
                 }
                 self.last_step_ts = next_step;
