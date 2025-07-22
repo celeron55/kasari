@@ -604,7 +604,11 @@ pub mod kasari {
             let jump_to_if_needed = target_rotation_speed
                 .max(-RPM_INITIAL_JUMP)
                 .min(RPM_INITIAL_JUMP);
-            if jump_to_if_needed.is_sign_positive() != self.current_rotation_speed.is_sign_positive() || (self.current_rotation_speed.abs() < RPM_INITIAL_JUMP && target_rotation_speed.abs() > self.current_rotation_speed.abs()) {
+            if jump_to_if_needed.is_sign_positive()
+                != self.current_rotation_speed.is_sign_positive()
+                || (self.current_rotation_speed.abs() < RPM_INITIAL_JUMP
+                    && target_rotation_speed.abs() > self.current_rotation_speed.abs())
+            {
                 self.current_rotation_speed = jump_to_if_needed;
             }
 
