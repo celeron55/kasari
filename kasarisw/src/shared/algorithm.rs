@@ -250,7 +250,7 @@ impl ObjectDetector {
             };
             avgs[i] = avg;
 
-            if 120.0 <= avg && avg <= 1500.0 {
+            if 120.0 <= avg && avg <= 3000.0 {
                 if avg < min_avg {
                     min_avg = avg;
                     min_idx = i;
@@ -274,7 +274,7 @@ impl ObjectDetector {
             let next_i = (i + 1) % n;
             let diff = fabsf(avgs[next_i] - avgs[i]);
             if diff > 80.0 {
-                large_changes.push((diff, i));
+                large_changes.try_push((diff, i));
             }
         }
 
@@ -284,71 +284,77 @@ impl ObjectDetector {
         let mut best_end = 0;
         let mut best_is_single = false;
 
-        // Paired on limited changes
-        for i in 0..large_changes.len() {
-            for j in (i + 1)..large_changes.len() {
-                let mut idx1 = large_changes[i].1;
-                let mut idx2 = large_changes[j].1;
-                let (min_idx, max_idx) = if idx1 < idx2 {
-                    (idx1, idx2)
-                } else {
-                    (idx2, idx1)
-                };
-                let diff = max_idx - min_idx;
-                let wrap_diff = n - diff;
-                let is_wrap = wrap_diff < diff;
-                let effective_diff = if is_wrap { wrap_diff } else { diff };
-                if effective_diff < 4 || effective_diff > 30 {
-                    continue;
-                }
-                let middle_count = (effective_diff - 1) as f32;
-                let sum_middle = if !is_wrap {
-                    prefix_avgs[max_idx] - prefix_avgs[min_idx + 1]
-                } else {
-                    (prefix_avgs[n] - prefix_avgs[min_idx + 1]) + prefix_avgs[max_idx]
-                };
-                let avg_middle = sum_middle / middle_count;
-                let start_avg = avgs[idx1];
-                let end_avg = avgs[idx2];
-                if avg_middle < start_avg.min(end_avg) - 100.0 {
-                    let depth = start_avg.min(end_avg) - avg_middle;
-                    let union_len = (wall_window_size + effective_diff - 2) as f32;
-                    let score = depth * union_len.min(3.0);
-                    if score > best_score {
-                        best_score = score;
-                        best_start = idx1;
-                        best_end = idx2;
-                        best_is_single = false;
+        // We can only use large_changes if it isn't full. If it is full, we
+        // can't use it because the actual features we're after might not have
+        // ended up in it at all. In that case we'll trust the fallback
+        // detection method.
+        if !large_changes.is_full() {
+            // Paired on limited changes
+            for i in 0..large_changes.len() {
+                for j in (i + 1)..large_changes.len() {
+                    let mut idx1 = large_changes[i].1;
+                    let mut idx2 = large_changes[j].1;
+                    let (min_idx, max_idx) = if idx1 < idx2 {
+                        (idx1, idx2)
+                    } else {
+                        (idx2, idx1)
+                    };
+                    let diff = max_idx - min_idx;
+                    let wrap_diff = n - diff;
+                    let is_wrap = wrap_diff < diff;
+                    let effective_diff = if is_wrap { wrap_diff } else { diff };
+                    if effective_diff < 4 || effective_diff > 30 {
+                        continue;
+                    }
+                    let middle_count = (effective_diff - 1) as f32;
+                    let sum_middle = if !is_wrap {
+                        prefix_avgs[max_idx] - prefix_avgs[min_idx + 1]
+                    } else {
+                        (prefix_avgs[n] - prefix_avgs[min_idx + 1]) + prefix_avgs[max_idx]
+                    };
+                    let avg_middle = sum_middle / middle_count;
+                    let start_avg = avgs[idx1];
+                    let end_avg = avgs[idx2];
+                    if avg_middle < start_avg.min(end_avg) - 100.0 {
+                        let depth = start_avg.min(end_avg) - avg_middle;
+                        let union_len = (wall_window_size + effective_diff - 2) as f32;
+                        let score = depth * union_len.min(3.0);
+                        if score > best_score {
+                            best_score = score;
+                            best_start = idx1;
+                            best_end = idx2;
+                            best_is_single = false;
+                        }
                     }
                 }
             }
-        }
 
-        // Single
-        for &(dist_diff, mut idx) in &large_changes {
-            if dist_diff < 80.0 {
-                continue;
-            }
-            let mut local_idx2 = (idx + 1) % n;
-            let mut local_idx1 = idx;
-            let mut local_depth = avgs[local_idx2] - avgs[local_idx1];
-            let mut local_is_flipped = false;
-            if local_depth < -80.0 {
-                local_depth = -local_depth;
-                local_is_flipped = true;
-                core::mem::swap(&mut local_idx1, &mut local_idx2);
-            } else if local_depth < 80.0 {
-                continue;
-            }
-            let avg_middle_dist = avgs[local_idx1];
-            let union_len = wall_window_size as f32;
-            let score = local_depth * union_len.min(3.0);
-            if local_depth > 80.0 && 120.0 <= avg_middle_dist && avg_middle_dist <= 1200.0 {
-                if score > best_score {
-                    best_score = score;
-                    best_start = local_idx1;
-                    best_end = local_idx2;
-                    best_is_single = true;
+            // Single
+            for &(dist_diff, mut idx) in &large_changes {
+                if dist_diff < 80.0 {
+                    continue;
+                }
+                let mut local_idx2 = (idx + 1) % n;
+                let mut local_idx1 = idx;
+                let mut local_depth = avgs[local_idx2] - avgs[local_idx1];
+                let mut local_is_flipped = false;
+                if local_depth < -80.0 {
+                    local_depth = -local_depth;
+                    local_is_flipped = true;
+                    core::mem::swap(&mut local_idx1, &mut local_idx2);
+                } else if local_depth < 80.0 {
+                    continue;
+                }
+                let avg_middle_dist = avgs[local_idx1];
+                let union_len = wall_window_size as f32;
+                let score = local_depth * union_len.min(3.0);
+                if local_depth > 80.0 && 120.0 <= avg_middle_dist && avg_middle_dist <= 1200.0 {
+                    if score > best_score {
+                        best_score = score;
+                        best_start = local_idx1;
+                        best_end = local_idx2;
+                        best_is_single = true;
+                    }
                 }
             }
         }
