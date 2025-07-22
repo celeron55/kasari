@@ -1,4 +1,5 @@
 use kasarisw::shared::rem_euclid_f32;
+use libm::{cosf, sinf};
 use std::f32::consts::PI;
 
 #[derive(Clone, Copy)]
@@ -111,10 +112,19 @@ impl Robot {
         self.theta += (self.rpm / 60.0 * 2.0 * PI) * dt;
         self.theta = rem_euclid_f32(self.theta, 2.0 * PI);
 
+        // No idea why this has to be pi/4 but that's what it has to be for the
+        // robot to move towards the target direction in the simulator
+        // TODO: Test whether real hardware behaves the same
+        const TARGET_MOVEMENT_ANGLE_OFFSET: f32 = PI / 4.0;
+        let cos_off = cosf(TARGET_MOVEMENT_ANGLE_OFFSET);
+        let sin_off = sinf(TARGET_MOVEMENT_ANGLE_OFFSET);
+        let rotated_x = movement_x * cos_off - movement_y * sin_off;
+        let rotated_y = movement_x * sin_off + movement_y * cos_off;
+
         let accel_const = 2000.0; // mm/s² per unit mag
         let drag_const = 3.0; // 3/s
-        let accel_x = -accel_const * movement_x;
-        let accel_y = -accel_const * movement_y;
+        let accel_x = -accel_const * rotated_x;
+        let accel_y = -accel_const * rotated_y;
         self.vel_x += (accel_x - self.vel_x * drag_const) * dt;
         self.vel_y += (accel_y - self.vel_y * drag_const) * dt;
 
