@@ -1,15 +1,15 @@
 // simulator/app.rs
 use crate::events::get_ts;
-use kasarisw::shared::algorithm::{BIN_ANGLE_STEP, NUM_BINS};
-use kasarisw::shared::kasari::{InputEvent, MainLogic, MotorControlPlan};
-use crate::sources::EventSource;
-use crate::sources::SimEventSource;
-use crate::sources::FileEventSource;
 use crate::physics::{Rect, Robot, World};
+use crate::sources::EventSource;
+use crate::sources::FileEventSource;
+use crate::sources::SimEventSource;
 use eframe::egui;
 use egui_plot::{Line, Plot, PlotBounds, PlotPoints};
+use kasarisw::shared::algorithm::{BIN_ANGLE_STEP, NUM_BINS};
+use kasarisw::shared::kasari::{InputEvent, MainLogic, MotorControlPlan};
+use std::io::Error as IoError;
 use std::time::Instant;
-use std::io::{Error as IoError};
 
 pub struct MyApp {
     logic: MainLogic,
@@ -38,7 +38,11 @@ impl MyApp {
         let event_source: Box<dyn EventSource> = if sim_mode {
             Box::new(SimEventSource::new(lidar_distance_offset, debug))
         } else {
-            Box::new(FileEventSource::new(lines, inject_autonomous, lidar_distance_offset))
+            Box::new(FileEventSource::new(
+                lines,
+                inject_autonomous,
+                lidar_distance_offset,
+            ))
         };
 
         Self {
@@ -479,4 +483,3 @@ impl eframe::App for MyApp {
         ctx.request_repaint();
     }
 }
-
