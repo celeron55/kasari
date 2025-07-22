@@ -318,7 +318,11 @@ pub mod kasari {
                         let angle_object = atan2f(obj_y, obj_x);
                         let angle_diff =
                             fabsf(rem_euclid_f32(angle_center - angle_object + PI, 2.0 * PI) - PI);
-                        if obj_len < center_len && angle_diff < PI / 4.0 && center_len > 0.0 && obj_len > 0.0 {
+                        if obj_len < center_len
+                            && angle_diff < PI / 4.0
+                            && center_len > 0.0
+                            && obj_len > 0.0
+                        {
                             // Compute perpendicular vectors
                             let perp_x1 = -center_y;
                             let perp_y1 = center_x;
