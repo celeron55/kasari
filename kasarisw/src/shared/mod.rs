@@ -183,7 +183,7 @@ pub mod kasari {
                                     pulse_length, stick_percent
                                 );
                             }
-                            if stick_percent >= 30.0 {
+                            if stick_percent >= 5.0 {
                                 self.autonomous_enabled = true;
                             } else {
                                 self.autonomous_enabled = false;
@@ -206,6 +206,7 @@ pub mod kasari {
                             }
                         }
                         None => {
+                            self.autonomous_enabled = false;
                             self.motor_control_plan = None;
                         }
                     }
