@@ -108,24 +108,34 @@ pub struct Robot {
 }
 
 impl Robot {
-    pub fn update(&mut self, dt: f32, movement_x: f32, movement_y: f32, world: &World) {
+    pub fn update(
+        &mut self,
+        dt: f32,
+        movement_x: f32,
+        movement_y: f32,
+        world: &World,
+        detector_theta: f32,
+    ) {
         self.theta += (self.rpm / 60.0 * 2.0 * PI) * dt;
         self.theta = rem_euclid_f32(self.theta, 2.0 * PI);
 
-        // TODO: This doesn't actually work. The required offset changes every
-        // time the robot is simulated to lose ObjectDetector theta sync with
-        // the world, for example in collisions with arena walls
-        // Initially before any collisions occur, pi/4 works here as the offset.
-        const TARGET_MOVEMENT_ANGLE_OFFSET: f32 = PI / 4.0;
-        let cos_off = cosf(TARGET_MOVEMENT_ANGLE_OFFSET);
-        let sin_off = sinf(TARGET_MOVEMENT_ANGLE_OFFSET);
+        // Dynamic offset: fixed part + theta difference +
+        // lag compensation
+        let delta_theta = -(detector_theta - self.theta);
+        let omega = (self.rpm.abs() / 60.0 * 2.0 * PI);
+        let lag = 0.0 * omega;
+        let theta_off = 0.0 * lag;
+        let target_movement_angle_offset: f32 = PI * 0.0 + delta_theta + theta_off;
+
+        let cos_off = cosf(target_movement_angle_offset);
+        let sin_off = sinf(target_movement_angle_offset);
         let rotated_x = movement_x * cos_off - movement_y * sin_off;
         let rotated_y = movement_x * sin_off + movement_y * cos_off;
 
         let accel_const = 2000.0; // mm/s² per unit mag
         let drag_const = 3.0; // 3/s
-        let accel_x = -accel_const * rotated_x;
-        let accel_y = -accel_const * rotated_y;
+        let accel_x = accel_const * rotated_x;
+        let accel_y = accel_const * rotated_y;
         self.vel_x += (accel_x - self.vel_x * drag_const) * dt;
         self.vel_y += (accel_y - self.vel_y * drag_const) * dt;
 

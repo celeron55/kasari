@@ -269,7 +269,11 @@ impl SimEventSource {
     pub fn update_robot_physics(&mut self, dt: f32) {
         self.modulator.step(self.last_advance_ts);
         const MAX_RPM_CHANGE_PER_S: f32 = 1000.0; // Limited by wheel friction
-        self.robot.rpm = self.modulator.current_rotation_speed.max(self.robot.rpm - MAX_RPM_CHANGE_PER_S * dt).min(self.robot.rpm + MAX_RPM_CHANGE_PER_S * dt);
+        self.robot.rpm = self
+            .modulator
+            .current_rotation_speed
+            .max(self.robot.rpm - MAX_RPM_CHANGE_PER_S * dt)
+            .min(self.robot.rpm + MAX_RPM_CHANGE_PER_S * dt);
         let movement_x = self
             .control_logic
             .motor_control_plan
@@ -278,7 +282,13 @@ impl SimEventSource {
             .control_logic
             .motor_control_plan
             .map_or(0.0, |p| p.movement_y);
-        self.robot.update(dt, movement_x, movement_y, &self.world);
+        self.robot.update(
+            dt,
+            movement_x,
+            movement_y,
+            &self.world,
+            self.control_logic.detector.theta,
+        );
     }
 
     pub fn ensure_buffer_has_event(&mut self) {
