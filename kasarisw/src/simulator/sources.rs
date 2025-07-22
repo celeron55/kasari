@@ -268,7 +268,7 @@ impl SimEventSource {
 
     pub fn update_robot_physics(&mut self, dt: f32) {
         self.modulator.step(self.last_advance_ts);
-        const MAX_RPM_CHANGE_PER_S: f32 = 1000.0; // Limited by wheel friction
+        const MAX_RPM_CHANGE_PER_S: f32 = 2000.0; // Limited by wheel friction
         self.robot.rpm = self
             .modulator
             .current_rotation_speed

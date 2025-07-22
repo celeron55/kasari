@@ -18,6 +18,7 @@ pub mod algorithm;
 use algorithm::{DetectionResult, ObjectDetector};
 
 pub const MAX_RPM_RAMP_RATE: f32 = 2000.0; // rpm/s
+pub const RPM_INITIAL_JUMP: f32 = 500.0; // rpm
 
 pub const LOG_LIDAR: bool = false;
 pub const LOG_ALL_LIDAR: bool = false;
@@ -63,7 +64,7 @@ pub mod kasari {
     use crate::shared::ObjectDetector;
     use crate::shared::{
         get_current_timestamp, LOG_DETECTION, LOG_RECEIVER, LOG_VBAT, LOG_WIFI_CONTROL,
-        MAX_RPM_RAMP_RATE,
+        MAX_RPM_RAMP_RATE, RPM_INITIAL_JUMP,
     };
     #[cfg(target_os = "none")]
     use alloc::vec::Vec;
@@ -593,10 +594,19 @@ pub mod kasari {
             let target_movement_x = self.mcp.as_ref().map_or(0.0, |p| p.movement_x);
             let target_movement_y = self.mcp.as_ref().map_or(0.0, |p| p.movement_y);
 
+            // Allow MAX_RPM_RAMP_RATE in change in RPM
             // Tolerate negative dt (sometimes happens)
-            let max_delta = (MAX_RPM_RAMP_RATE * dt).max(0.0);
-            self.current_rotation_speed +=
-                (target_rotation_speed - self.current_rotation_speed).clamp(-max_delta, max_delta);
+            let max_rpm_delta = (MAX_RPM_RAMP_RATE * dt).max(0.0);
+            self.current_rotation_speed += (target_rotation_speed - self.current_rotation_speed)
+                .clamp(-max_rpm_delta, max_rpm_delta);
+
+            // Allow initial jump in RPM within RPM_INITIAL_JUMP
+            let jump_to_if_needed = target_rotation_speed
+                .max(-RPM_INITIAL_JUMP)
+                .min(RPM_INITIAL_JUMP);
+            if jump_to_if_needed.is_sign_positive() != self.current_rotation_speed.is_sign_positive() || (self.current_rotation_speed.abs() < RPM_INITIAL_JUMP && target_rotation_speed.abs() > self.current_rotation_speed.abs()) {
+                self.current_rotation_speed = jump_to_if_needed;
+            }
 
             let base_rpm = self.current_rotation_speed;
 
