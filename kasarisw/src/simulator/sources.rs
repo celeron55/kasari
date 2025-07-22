@@ -1,11 +1,11 @@
 use crate::events::{get_ts, parse_event};
 use crate::physics::{Rect, Robot, World};
-use kasarisw::shared::algorithm::{BIN_ANGLE_STEP, NUM_BINS};
-use kasarisw::shared::kasari::{InputEvent, MainLogic, MotorControlPlan};
-use kasarisw::shared::rem_euclid_f32;
-use kasarisw::shared::kasari;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::pubsub::PubSubChannel;
+use kasarisw::shared::algorithm::{BIN_ANGLE_STEP, NUM_BINS};
+use kasarisw::shared::kasari;
+use kasarisw::shared::kasari::{InputEvent, MainLogic, MotorControlPlan};
+use kasarisw::shared::rem_euclid_f32;
 use static_cell::StaticCell;
 use std::collections::VecDeque;
 use std::error::Error;
@@ -190,12 +190,15 @@ impl EventSource for FileEventSource {
     }
 }
 
-static CHANNEL: StaticCell<PubSubChannel<CriticalSectionRawMutex, InputEvent, 32, 2, 6>> = StaticCell::new();
+static CHANNEL: StaticCell<PubSubChannel<CriticalSectionRawMutex, InputEvent, 32, 2, 6>> =
+    StaticCell::new();
 
 pub struct SimEventSource {
     control_logic: MainLogic,
-    control_publisher: embassy_sync::pubsub::Publisher<'static, CriticalSectionRawMutex, InputEvent, 32, 2, 6>,
-    control_subscriber: embassy_sync::pubsub::Subscriber<'static, CriticalSectionRawMutex, InputEvent, 32, 2, 6>,
+    control_publisher:
+        embassy_sync::pubsub::Publisher<'static, CriticalSectionRawMutex, InputEvent, 32, 2, 6>,
+    control_subscriber:
+        embassy_sync::pubsub::Subscriber<'static, CriticalSectionRawMutex, InputEvent, 32, 2, 6>,
     event_buffer: VecDeque<InputEvent>,
     modulator: kasari::MotorModulator,
     robot: Robot,
@@ -266,14 +269,20 @@ impl SimEventSource {
     pub fn update_robot_physics(&mut self, dt: f32) {
         self.modulator.step(self.last_advance_ts);
         self.robot.rpm = self.modulator.current_rotation_speed;
-        let movement_x = self.control_logic.motor_control_plan.map_or(0.0, |p| p.movement_x);
-        let movement_y = self.control_logic.motor_control_plan.map_or(0.0, |p| p.movement_y);
+        let movement_x = self
+            .control_logic
+            .motor_control_plan
+            .map_or(0.0, |p| p.movement_x);
+        let movement_y = self
+            .control_logic
+            .motor_control_plan
+            .map_or(0.0, |p| p.movement_y);
         self.robot.update(dt, movement_x, movement_y, &self.world);
     }
 
     pub fn ensure_buffer_has_event(&mut self) {
         while self.event_buffer.is_empty() {
-            let next_ts = self.last_advance_ts + 1000; // Advance in 1ms steps
+            let next_ts = self.last_advance_ts + 2083; // Advance at lidar event rate
             self.advance_to_ts(next_ts);
         }
     }
@@ -321,16 +330,22 @@ impl SimEventSource {
                 let step_theta = delta_theta / 3.0;
                 let mut distances = [0.0; 4];
                 for i in 0..4 {
-                    let angle = rem_euclid_f32(
-                        self.robot.theta - ((3 - i) as f32 * step_theta),
-                        2.0 * PI,
-                    );
+                    let angle =
+                        rem_euclid_f32(self.robot.theta - ((3 - i) as f32 * step_theta), 2.0 * PI);
                     let dir_x = angle.cos();
                     let dir_y = angle.sin();
-                    let true_dist = self.world.raycast(self.robot.pos_x, self.robot.pos_y, dir_x, dir_y);
+                    let true_dist =
+                        self.world
+                            .raycast(self.robot.pos_x, self.robot.pos_y, dir_x, dir_y);
                     distances[i] = (true_dist - self.lidar_distance_offset).max(0.0);
                 }
-                let event = InputEvent::Lidar(next_lidar, distances[0], distances[1], distances[2], distances[3]);
+                let event = InputEvent::Lidar(
+                    next_lidar,
+                    distances[0],
+                    distances[1],
+                    distances[2],
+                    distances[3],
+                );
                 self.event_buffer.push_back(event.clone());
                 self.control_logic.feed_event(event);
                 self.last_lidar_ts = next_lidar;
@@ -342,7 +357,8 @@ impl SimEventSource {
                 while let Some(event) = self.control_subscriber.try_next_message_pure() {
                     self.event_buffer.push_back(event.clone());
                     if let InputEvent::Planner(ts, plan, _, _, _, _, _) = &event {
-                        self.modulator.sync(*ts, self.robot.theta, self.robot.rpm, plan.clone());
+                        self.modulator
+                            .sync(*ts, self.robot.theta, self.robot.rpm, plan.clone());
                     }
                 }
                 self.last_step_ts = next_step;

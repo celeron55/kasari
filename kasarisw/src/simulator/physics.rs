@@ -159,7 +159,11 @@ impl Robot {
 
         // Handle object collisions
         for obj in &world.objects {
-            if robot_max_x > obj.min_x && robot_min_x < obj.max_x && robot_max_y > obj.min_y && robot_min_y < obj.max_y {
+            if robot_max_x > obj.min_x
+                && robot_min_x < obj.max_x
+                && robot_max_y > obj.min_y
+                && robot_min_y < obj.max_y
+            {
                 // Overlapping
                 let pen_x_left = robot_max_x - obj.min_x;
                 let pen_x_right = obj.max_x - robot_min_x;

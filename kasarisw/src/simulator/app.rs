@@ -1,9 +1,11 @@
+// simulator/app.rs
 use crate::events::get_ts;
 use kasarisw::shared::algorithm::{BIN_ANGLE_STEP, NUM_BINS};
 use kasarisw::shared::kasari::{InputEvent, MainLogic, MotorControlPlan};
 use crate::sources::EventSource;
 use crate::sources::SimEventSource;
 use crate::sources::FileEventSource;
+use crate::physics::{Rect, Robot, World};
 use eframe::egui;
 use egui_plot::{Line, Plot, PlotBounds, PlotPoints};
 use std::time::Instant;
@@ -93,6 +95,16 @@ impl MyApp {
         }
         self.current_event_idx += 1;
     }
+}
+
+fn world_to_local(wx: f32, wy: f32, pos_x: f32, pos_y: f32, theta: f32) -> (f64, f64) {
+    let dx = wx - pos_x;
+    let dy = wy - pos_y;
+    let cos_t = theta.cos();
+    let sin_t = theta.sin();
+    let lx = dx * cos_t - dy * sin_t;
+    let ly = dx * sin_t + dy * cos_t;
+    (lx as f64, ly as f64)
 }
 
 impl eframe::App for MyApp {
@@ -193,6 +205,9 @@ impl eframe::App for MyApp {
                 0.0
             }
         });
+
+        let robot_opt = self.event_source.get_robot();
+        let world_opt = self.event_source.get_world();
 
         egui::CentralPanel::default().show(ctx, |ui| {
             let heading_text = format!(
@@ -389,6 +404,43 @@ impl eframe::App for MyApp {
                                 egui_plot::Points::new(vec![[theta_x, theta_y]])
                                     .color(egui::Color32::YELLOW)
                                     .radius(8.0),
+                            );
+                        }
+                    }
+                }
+
+                if let (Some(robot), Some(world)) = (robot_opt, world_opt) {
+                    let mut rects: Vec<Rect> = vec![world.arena];
+                    rects.extend(world.objects.clone());
+                    let robot_rect = Rect {
+                        min_x: robot.pos_x - 70.0,
+                        min_y: robot.pos_y - 70.0,
+                        max_x: robot.pos_x + 70.0,
+                        max_y: robot.pos_y + 70.0,
+                    };
+                    rects.push(robot_rect);
+
+                    // Not sure where this error comes from
+                    let theta_off = 0.25;
+                    // This aligns the rectangles to the lidar plot
+                    let d_theta = self.logic.detector.theta - robot.theta + theta_off;
+
+                    for r in rects {
+                        let corners = vec![
+                            world_to_local(r.min_x, r.min_y, robot.pos_x, robot.pos_y, d_theta),
+                            world_to_local(r.max_x, r.min_y, robot.pos_x, robot.pos_y, d_theta),
+                            world_to_local(r.max_x, r.max_y, robot.pos_x, robot.pos_y, d_theta),
+                            world_to_local(r.min_x, r.max_y, robot.pos_x, robot.pos_y, d_theta),
+                            world_to_local(r.min_x, r.min_y, robot.pos_x, robot.pos_y, d_theta), // close the loop
+                        ];
+
+                        for i in 0..4 {
+                            let p1 = corners[i];
+                            let p2 = corners[i + 1];
+                            plot_ui.line(
+                                Line::new(PlotPoints::new(vec![[p1.0, p1.1], [p2.0, p2.1]]))
+                                    .color(egui::Color32::DARK_GRAY)
+                                    .width(1.0),
                             );
                         }
                     }
