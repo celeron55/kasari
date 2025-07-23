@@ -130,6 +130,9 @@ pub mod kasari {
         current_rotation_speed: f32,
         pub reverse_rotation: bool,
         reverse_rotation_ts: u64,
+        target_rotation_speed: f32,
+        movement_x: f32,
+        movement_y: f32,
     }
 
     impl MainLogic {
@@ -159,6 +162,9 @@ pub mod kasari {
                 current_rotation_speed: 0.0,
                 reverse_rotation,
                 reverse_rotation_ts: 0,
+                target_rotation_speed: 0.0,
+                movement_x: 0.0,
+                movement_y: 0.0,
             }
         }
 
@@ -192,26 +198,16 @@ pub mod kasari {
                                 self.autonomous_enabled = true;
                             } else {
                                 self.autonomous_enabled = false;
-                                // We want a zeroed out motor control plan
-                                // instead of None because the ESCs won't
-                                // initialize unless we give them a moment of
-                                // zeroed out throttle input first.
-                                // Unfortunately this will brake hard when
-                                // autonomous mode is turned off afterwards,
-                                // which could be fixed by adding a variable
-                                // which tracks whether autonomous mode was
-                                // turned on previously and if it was, then this
-                                // would be set to None to avoid braking hard.
-                                self.motor_control_plan = Some(MotorControlPlan {
-                                    timestamp: timestamp,
-                                    rotation_speed: 0.0,
-                                    movement_x: 0.0,
-                                    movement_y: 0.0,
-                                });
+                                self.target_rotation_speed = 0.0;
+                                self.movement_x = 0.0;
+                                self.movement_y = 0.0;
                             }
                         }
                         None => {
                             self.autonomous_enabled = false;
+                            self.target_rotation_speed = 0.0;
+                            self.movement_x = 0.0;
+                            self.movement_y = 0.0;
                             self.motor_control_plan = None;
                         }
                     }
@@ -247,21 +243,17 @@ pub mod kasari {
                     self.control_rotation_speed = r;
                     self.control_movement_speed = m;
                     self.control_turning_speed = t;
-                    if self.control_mode != 1 && self.control_mode != 2 {
-                        return;
-                    }
                     if !self.vbat_ok {
                         self.motor_control_plan = None;
-                        return;
                     }
                     if self.control_mode == 1 {
-                        let timestamp = get_current_timestamp();
-                        self.motor_control_plan = Some(MotorControlPlan {
-                            timestamp: timestamp,
-                            rotation_speed: self.control_rotation_speed,
-                            movement_x: 0.0,
-                            movement_y: 0.0,
-                        });
+                        self.target_rotation_speed = self.control_rotation_speed;
+                        self.movement_x = 0.0;
+                        self.movement_y = 0.0;
+                    } else if self.control_mode != 2 {
+                        self.target_rotation_speed = 0.0;
+                        self.movement_x = 0.0;
+                        self.movement_y = 0.0;
                     }
                 }
                 InputEvent::Planner(..) => {}
@@ -279,10 +271,11 @@ pub mod kasari {
                 self.reverse_rotation = !self.reverse_rotation;
             }
 
-            let rotation_speed = TARGET_RPM * if self.reverse_rotation { -1.0 } else { 1.0 };
+            self.target_rotation_speed =
+                TARGET_RPM * if self.reverse_rotation { -1.0 } else { 1.0 };
 
-            let mut movement_x = 0.0;
-            let mut movement_y = 0.0;
+            self.movement_x = 0.0;
+            self.movement_y = 0.0;
 
             if fabsf(self.detector.rpm) >= MIN_MOVE_RPM {
                 let wall_x = self.latest_closest_wall.0;
@@ -302,8 +295,8 @@ pub mod kasari {
                     let target_y = (away_y + self.latest_open_space.1) / 2.0;
                     let target_len = sqrtf(target_x * target_x + target_y * target_y);
                     if target_len > 0.0 {
-                        movement_x = target_x / target_len * 1.0;
-                        movement_y = target_y / target_len * 1.0;
+                        self.movement_x = target_x / target_len * 1.0;
+                        self.movement_y = target_y / target_len * 1.0;
                     }
                 } else {
                     // Normal mode: alternate between center and object
@@ -410,106 +403,109 @@ pub mod kasari {
                         // Re-normalize
                         let new_len = sqrtf(movement_x * movement_x + movement_y * movement_y);
                         if new_len > 0.0 {
-                            movement_x /= new_len;
-                            movement_y /= new_len;
+                            self.movement_x /= new_len;
+                            self.movement_y /= new_len;
                         }
                     } else*/
                     {
-                        movement_x = intended_x;
-                        movement_y = intended_y;
+                        self.movement_x = intended_x;
+                        self.movement_y = intended_y;
                     }
                 }
             }
+        }
 
-            self.motor_control_plan = Some(MotorControlPlan {
-                timestamp: ts,
-                rotation_speed,
-                movement_x,
-                movement_y,
-            });
+        pub fn control_rpm(&mut self, timestamp: u64) {
+            let dt = if let Some(last) = self.last_rpm_update_ts {
+                ((timestamp as i64 - last as i64) as f32) / 1_000_000.0
+            } else {
+                0.0
+            };
+            let max_rpm_delta = MAX_RPM_RAMP_RATE * dt.max(0.0);
+            let target = self.target_rotation_speed;
+            self.current_rotation_speed +=
+                (target - self.current_rotation_speed).clamp(-max_rpm_delta, max_rpm_delta);
+
+            // Allow initial jump in RPM within RPM_INITIAL_JUMP
+            let jump_to_if_needed = target.max(-RPM_INITIAL_JUMP).min(RPM_INITIAL_JUMP);
+            if jump_to_if_needed.signum() != self.current_rotation_speed.signum()
+                || (self.current_rotation_speed.abs() < RPM_INITIAL_JUMP
+                    && target.abs() > self.current_rotation_speed.abs())
+            {
+                self.current_rotation_speed = jump_to_if_needed;
+            }
+
+            self.last_rpm_update_ts = Some(timestamp);
         }
 
         pub fn step(
             &mut self,
+            timestamp: u64,
             publisher: Option<
                 &mut embassy_sync::pubsub::Publisher<CriticalSectionRawMutex, InputEvent, 32, 2, 6>,
             >,
             debug: bool,
         ) {
-            if let Some(last_ts) = self.detector.last_ts {
-                if last_ts - self.last_planner_ts >= 100_000 {
-                    self.last_planner_ts = last_ts;
+            if (timestamp as i64 - self.last_planner_ts as i64) >= 100_000 {
+                self.last_planner_ts = timestamp;
 
-                    let result = self.detector.detect_objects(debug);
-                    self.latest_closest_wall = result.closest_wall;
-                    self.latest_open_space = result.open_space;
-                    self.latest_object_pos = result.object_pos;
-                    self.latest_wall_distances = result.wall_distances;
-                    self.latest_position = result.position;
-                    self.latest_velocity = result.velocity;
-                    if debug {
-                        println!(
-                            "Detected: Wall {:?}, Open {:?}, Object {:?} (bins={})",
-                            result.closest_wall,
-                            result.open_space,
-                            result.object_pos,
-                            self.detector.bin_count()
-                        );
-                    }
+                let result = self.detector.detect_objects(debug);
+                self.latest_closest_wall = result.closest_wall;
+                self.latest_open_space = result.open_space;
+                self.latest_object_pos = result.object_pos;
+                self.latest_wall_distances = result.wall_distances;
+                self.latest_position = result.position;
+                self.latest_velocity = result.velocity;
+                if debug {
+                    println!(
+                        "Detected: Wall {:?}, Open {:?}, Object {:?} (bins={})",
+                        result.closest_wall,
+                        result.open_space,
+                        result.object_pos,
+                        self.detector.bin_count()
+                    );
+                }
 
-                    if self.autonomous_enabled {
-                        self.autonomous_update(last_ts);
-                    } else {
-                        self.autonomous_start_ts = None;
-                    }
+                if self.autonomous_enabled {
+                    self.autonomous_update(timestamp);
+                }
 
-                    if let Some(ref mut plan) = self.motor_control_plan {
-                        let dt = if let Some(last) = self.last_rpm_update_ts {
-                            ((last_ts - last) as f32) / 1_000_000.0
-                        } else {
-                            0.0
-                        };
-                        // Allow MAX_RPM_RAMP_RATE in change in RPM Tolerate
-                        // negative dt (sometimes happens)
-                        let max_rpm_delta = MAX_RPM_RAMP_RATE * dt.max(0.0);
-                        let target = plan.rotation_speed;
-                        self.current_rotation_speed += (target - self.current_rotation_speed)
-                            .clamp(-max_rpm_delta, max_rpm_delta);
+                let plan = MotorControlPlan {
+                    timestamp: timestamp,
+                    rotation_speed: self.current_rotation_speed,
+                    movement_x: self.movement_x,
+                    movement_y: self.movement_y,
+                };
+                if let Some(publisher) = publisher {
+                    publisher.publish_immediate(InputEvent::Planner(
+                        timestamp,
+                        plan,
+                        result.closest_wall,
+                        result.open_space,
+                        result.object_pos,
+                        self.detector.theta,
+                        self.detector.rpm,
+                    ));
+                }
+            }
 
-                        // Allow initial jump in RPM within RPM_INITIAL_JUMP
-                        let jump_to_if_needed = target.max(-RPM_INITIAL_JUMP).min(RPM_INITIAL_JUMP);
-                        if jump_to_if_needed.signum() != self.current_rotation_speed.signum()
-                            || (self.current_rotation_speed.abs() < RPM_INITIAL_JUMP
-                                && target.abs() > self.current_rotation_speed.abs())
-                        {
-                            self.current_rotation_speed = jump_to_if_needed;
-                        }
+            self.control_rpm(timestamp);
 
-                        plan.rotation_speed = self.current_rotation_speed;
-                    }
-                    self.last_rpm_update_ts = Some(last_ts);
-
-                    let plan = if let Some(ref p) = self.motor_control_plan {
-                        p.clone()
-                    } else {
-                        MotorControlPlan {
-                            timestamp: last_ts,
-                            rotation_speed: 0.0,
-                            movement_x: 0.0,
-                            movement_y: 0.0,
-                        }
-                    };
-                    if let Some(publisher) = publisher {
-                        publisher.publish_immediate(InputEvent::Planner(
-                            last_ts,
-                            plan,
-                            result.closest_wall,
-                            result.open_space,
-                            result.object_pos,
-                            self.detector.theta,
-                            self.detector.rpm,
-                        ));
-                    }
+            if !self.vbat_ok {
+                self.motor_control_plan = None;
+            } else {
+                if let Some(ref mut plan) = self.motor_control_plan {
+                    plan.timestamp = timestamp;
+                    plan.rotation_speed = self.current_rotation_speed;
+                    plan.movement_x = self.movement_x;
+                    plan.movement_y = self.movement_y;
+                } else {
+                    self.motor_control_plan = Some(MotorControlPlan {
+                        timestamp,
+                        rotation_speed: self.current_rotation_speed,
+                        movement_x: self.movement_x,
+                        movement_y: self.movement_y,
+                    });
                 }
             }
         }
