@@ -26,6 +26,30 @@ pub trait EventSource {
     fn get_world(&self) -> Option<&World> {
         None
     }
+    fn get_logic(&self) -> Option<&MainLogic> {
+        None
+    }
+    fn get_logic_mut(&mut self) -> Option<&mut MainLogic> {
+        None
+    }
+}
+
+struct ReplayMirror {
+    logic: MainLogic,
+    debug: bool,
+}
+
+impl ReplayMirror {
+    pub fn new(debug: bool, reverse_rotation: bool) -> Self {
+        Self {
+            logic: MainLogic::new(reverse_rotation),
+            debug: debug,
+        }
+    }
+    pub fn process_event(&mut self, event: &InputEvent) {
+        self.logic.feed_event(event.clone());
+		self.logic.step(None, self.debug);
+    }
 }
 
 pub struct FileEventSource {
@@ -36,13 +60,17 @@ pub struct FileEventSource {
     first_lidar_found: bool,
     next_inject_ts: Option<u64>,
     lidar_distance_offset: f32,
+    mirror: ReplayMirror,
+    debug: bool,
 }
 
 impl FileEventSource {
     pub fn new(
         lines: Box<dyn Iterator<Item = Result<String, IoError>>>,
+        debug: bool,
         inject_autonomous: bool,
         lidar_distance_offset: f32,
+        reverse_rotation: bool,
     ) -> Self {
         Self {
             lines,
@@ -52,6 +80,8 @@ impl FileEventSource {
             first_lidar_found: false,
             next_inject_ts: None,
             lidar_distance_offset,
+            mirror: ReplayMirror::new(debug, reverse_rotation),
+            debug,
         }
     }
 
@@ -186,10 +216,35 @@ impl EventSource for FileEventSource {
                 self.next_real_event.take().unwrap()
             };
 
+            self.mirror.process_event(&event);
+
+            if self.debug {
+                match event {
+                    InputEvent::Lidar(ts, d1, d2, d3, d4) => println!(
+                        "Mirrored Lidar ts={} d=({:.0},{:.0},{:.0},{:.0}) theta={:.4} rpm={:.2}",
+                        ts, d1, d2, d3, d4, self.mirror.logic.detector.theta, self.mirror.logic.detector.rpm
+                    ),
+                    InputEvent::Accelerometer(ts, ay, az) => println!(
+                        "Mirrored Accel ts={} ay={:.2} az={:.2} theta={:.4} rpm={:.2}",
+                        ts, ay, az, self.mirror.logic.detector.theta, self.mirror.logic.detector.rpm
+                    ),
+                    _ => {}
+                }
+            }
+
+            self.mirror.logic.step(None, self.debug);
+
             Some(event)
         } else {
             None
         }
+    }
+
+    fn get_logic(&self) -> Option<&MainLogic> {
+        Some(&self.mirror.logic)
+    }
+    fn get_logic_mut(&mut self) -> Option<&mut MainLogic> {
+        Some(&mut self.mirror.logic)
     }
 }
 
@@ -226,11 +281,12 @@ impl SimEventSource {
         arena_width: f32,
         arena_height: f32,
         no_object: bool,
+        reverse_rotation: bool,
         robot_flipped: bool,
     ) -> Self {
         let channel = &*CHANNEL.init(PubSubChannel::new());
         let mut source = Self {
-            control_logic: MainLogic::new(),
+            control_logic: MainLogic::new(reverse_rotation),
             control_publisher: channel.publisher().unwrap(),
             control_subscriber: channel.subscriber().unwrap(),
             event_buffer: VecDeque::new(),
@@ -393,7 +449,7 @@ impl SimEventSource {
             }
 
             if next_step <= next_ts {
-                self.control_logic.step(Some(&mut self.control_publisher));
+                self.control_logic.step(Some(&mut self.control_publisher), self.debug);
                 while let Some(event) = self.control_subscriber.try_next_message_pure() {
                     self.event_buffer.push_back(event.clone());
                     if let InputEvent::Planner(ts, plan, _, _, _, _, _) = &event {
@@ -428,5 +484,9 @@ impl EventSource for SimEventSource {
 
     fn get_world(&self) -> Option<&World> {
         Some(&self.world)
+    }
+
+    fn get_logic(&self) -> Option<&MainLogic> {
+        Some(&self.control_logic)
     }
 }

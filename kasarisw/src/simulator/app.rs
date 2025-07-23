@@ -12,7 +12,6 @@ use std::io::Error as IoError;
 use std::time::Instant;
 
 pub struct MyApp {
-    logic: MainLogic,
     event_source: Box<dyn EventSource>,
     current_event_idx: usize, // For display purposes, count processed
     virtual_elapsed: f64,
@@ -47,21 +46,20 @@ impl MyApp {
                 arena_width,
                 arena_height,
                 object_present,
+                reverse_rotation,
                 robot_flipped,
             ))
         } else {
             Box::new(FileEventSource::new(
                 lines,
+                debug,
                 inject_autonomous,
                 lidar_distance_offset,
+                reverse_rotation,
             ))
         };
 
-        let mut logic = MainLogic::new();
-        logic.reverse_rotation = reverse_rotation;
-
         Self {
-            logic,
             event_source,
             current_event_idx: 0,
             virtual_elapsed: 0.0,
@@ -86,31 +84,16 @@ impl MyApp {
     }
 
     fn process_event(&mut self, event: &InputEvent) {
-        let cloned_event = event.clone();
-        self.logic.feed_event(cloned_event);
-        if self.debug {
-            match event {
-                InputEvent::Lidar(ts, d1, d2, d3, d4) => println!(
-                    "Processed Lidar ts={} d=({:.0},{:.0},{:.0},{:.0}) theta={:.4} rpm={:.2}",
-                    *ts, *d1, *d2, *d3, *d4, self.logic.detector.theta, self.logic.detector.rpm
-                ),
-                InputEvent::Accelerometer(ts, ay, az) => println!(
-                    "Processed Accel ts={} ay={:.2} az={:.2} theta={:.4} rpm={:.2}",
-                    *ts, *ay, *az, self.logic.detector.theta, self.logic.detector.rpm
-                ),
-                _ => {}
-            }
-        }
         if let InputEvent::Planner(ts, plan, cw, os, op, theta, rpm) = event {
-            self.theta_offset = self.logic.detector.theta - *theta;
+            self.theta_offset = self.event_source.get_logic().unwrap().detector.theta - *theta;
             self.latest_planner = Some(event.clone());
             self.show_planner_theta = true;
             if self.debug {
-                println!("Processed Planner ts={} plan={:?} theta={:.4} (sim: {:.4}) rpm={:.2} (sim: {:.4})", ts, plan, *theta, self.logic.detector.theta, rpm, self.logic.detector.rpm);
+                println!("Processed Planner ts={} plan={:?} theta={:.4} (sim: {:.4}) rpm={:.2} (sim: {:.4})", ts, plan, *theta, self.event_source.get_logic().unwrap().detector.theta, rpm, self.event_source.get_logic().unwrap().detector.rpm);
             }
         }
         if matches!(event, InputEvent::Lidar(..)) {
-            self.current_lidar_points = self.logic.detector.last_xys.to_vec();
+            self.current_lidar_points = self.event_source.get_logic().unwrap().detector.last_xys.to_vec();
         }
         self.current_event_idx += 1;
     }
@@ -168,7 +151,7 @@ impl eframe::App for MyApp {
                     }
                 }
                 // Update virtual_elapsed based on last processed ts
-                if let Some(last_ts) = self.logic.detector.last_ts {
+                if let Some(last_ts) = self.event_source.get_logic().unwrap().detector.last_ts {
                     self.virtual_elapsed = (last_ts - self.first_ts) as f64 / 1_000_000.0;
                 }
             }
@@ -194,22 +177,18 @@ impl eframe::App for MyApp {
         }
 
         // Object detection
-        let result = self.logic.detector.detect_objects(self.debug);
         let (closest_wall, open_space, object_pos) =
-            (result.closest_wall, result.open_space, result.object_pos);
+            (self.event_source.get_logic().unwrap().latest_closest_wall, self.event_source.get_logic().unwrap().latest_open_space, self.event_source.get_logic().unwrap().latest_object_pos);
 
         if self.debug && processed_events {
             println!("Simulator: ts={} theta={:.4} rpm={:.2} cw=({:.1},{:.1}) os=({:.1},{:.1}) op=({:.1},{:.1})",
-                self.logic.detector.last_ts.unwrap_or(0),
-                self.logic.detector.theta,
-                self.logic.detector.rpm,
+                self.event_source.get_logic().unwrap().detector.last_ts.unwrap_or(0),
+                self.event_source.get_logic().unwrap().detector.theta,
+                self.event_source.get_logic().unwrap().detector.rpm,
                 closest_wall.0, closest_wall.1,
                 open_space.0, open_space.1,
                 object_pos.0, object_pos.1);
         }
-
-        // Main logic
-        self.logic.step(None);
 
         // RPM values from event log
         let target_rpm = self.latest_planner.as_ref().map_or(0.0, |p| {
@@ -234,11 +213,11 @@ impl eframe::App for MyApp {
             let heading_text = format!(
                 "Real-Time Robot LiDAR Simulation\nEvents: {}, TS: {} ms, Simulator RPM: {:.2}, Measured RPM: {:.2}, Target RPM: {:.2}, flipped: {}",
                 self.current_event_idx,
-                self.logic.detector.last_ts.unwrap_or(0) / 1000,
-                self.logic.detector.rpm,
+                self.event_source.get_logic().unwrap().detector.last_ts.unwrap_or(0) / 1000,
+                self.event_source.get_logic().unwrap().detector.rpm,
                 measured_rpm,
                 target_rpm,
-                self.logic.detector.flipped,
+                self.event_source.get_logic().unwrap().detector.flipped,
             );
             ui.heading(heading_text);
 
@@ -258,7 +237,7 @@ impl eframe::App for MyApp {
                 plot_ui.set_plot_bounds(PlotBounds::from_min_max([-800., -800.], [800., 800.]));
 
                 let points: Vec<[f64; 2]> = (0..NUM_BINS).filter_map(|i| {
-                    let d = self.logic.detector.bins_dist[i];
+                    let d = self.event_source.get_logic().unwrap().detector.bins_dist[i];
                     if d.is_finite() {
                         let angle = i as f32 * BIN_ANGLE_STEP;
                         Some([(d * angle.cos()) as f64, (d * angle.sin()) as f64])
@@ -283,8 +262,8 @@ impl eframe::App for MyApp {
                 );
 
                 let heading_len: f64 = 200.0;
-                let hx = heading_len * self.logic.detector.theta.cos() as f64;
-                let hy = heading_len * self.logic.detector.theta.sin() as f64;
+                let hx = heading_len * self.event_source.get_logic().unwrap().detector.theta.cos() as f64;
+                let hy = heading_len * self.event_source.get_logic().unwrap().detector.theta.sin() as f64;
                 plot_ui.line(
                     Line::new(PlotPoints::new(vec![[0.0, 0.0], [hx, hy]]))
                         .color(egui::Color32::LIGHT_BLUE)
@@ -325,7 +304,7 @@ impl eframe::App for MyApp {
                 }
 
                 // Visualize simulated MotorControlPlan movement vector
-                if let Some(plan) = &self.logic.motor_control_plan {
+                if let Some(plan) = &self.event_source.get_logic().unwrap().motor_control_plan {
                     let speed = (plan.movement_x.powi(2) + plan.movement_y.powi(2)).sqrt();
                     if speed > 0.0 {
                         let vis_length = 200.0 * speed as f64;
@@ -345,8 +324,8 @@ impl eframe::App for MyApp {
                 // Modulation is known to work so we don't need to see this
                 /*let motor_radius: f64 = 40.0;
                 let speed_scale: f64 = 2.0 / 30.0;
-                let left_phi: f32 = PI / 2.0 + self.logic.detector.theta;
-                let right_phi: f32 = -PI / 2.0 + self.logic.detector.theta;
+                let left_phi: f32 = PI / 2.0 + self.event_source.get_logic().unwrap().detector.theta;
+                let right_phi: f32 = -PI / 2.0 + self.event_source.get_logic().unwrap().detector.theta;
                 let left_pos: [f64; 2] = [motor_radius * left_phi.cos() as f64, motor_radius * left_phi.sin() as f64];
                 let right_pos: [f64; 2] = [motor_radius * right_phi.cos() as f64, motor_radius * right_phi.sin() as f64];
                 let left_dir: [f64; 2] = [-left_phi.sin() as f64, left_phi.cos() as f64];
@@ -442,15 +421,8 @@ impl eframe::App for MyApp {
                     };
                     rects.push(robot_rect);
 
-                    // Compensate for some kind of constant time lag. I'm not
-                    // sure where this comes from but this describes the lag's
-                    // behavior at least between 500...2000rpm
-                    let rpm = self.logic.detector.rpm;
-                    let delta_theta = 0.002083 * (rpm / 60.0 * 2.0 * std::f32::consts::PI);
-                    let theta_off = 0.75 * delta_theta;
-
                     // This aligns the rectangles to the lidar plot
-                    let world_theta = self.logic.detector.theta - robot.theta + theta_off;
+                    let world_theta = self.event_source.get_logic().unwrap().detector.theta - robot.theta;
 
                     for r in rects {
                         let corners = vec![

@@ -133,7 +133,7 @@ pub mod kasari {
     }
 
     impl MainLogic {
-        pub fn new() -> Self {
+        pub fn new(reverse_rotation: bool) -> Self {
             Self {
                 motor_control_plan: None,
                 detector: ObjectDetector::new(),
@@ -157,7 +157,7 @@ pub mod kasari {
                 autonomous_duty_cycle: 0.6,            // 60% towards center, 40% towards object
                 last_rpm_update_ts: None,
                 current_rotation_speed: 0.0,
-                reverse_rotation: false,
+                reverse_rotation,
                 reverse_rotation_ts: 0,
             }
         }
@@ -434,19 +434,20 @@ pub mod kasari {
             publisher: Option<
                 &mut embassy_sync::pubsub::Publisher<CriticalSectionRawMutex, InputEvent, 32, 2, 6>,
             >,
+            debug: bool,
         ) {
             if let Some(last_ts) = self.detector.last_ts {
                 if last_ts - self.last_planner_ts >= 100_000 {
                     self.last_planner_ts = last_ts;
 
-                    let result = self.detector.detect_objects(false);
+                    let result = self.detector.detect_objects(debug);
                     self.latest_closest_wall = result.closest_wall;
                     self.latest_open_space = result.open_space;
                     self.latest_object_pos = result.object_pos;
                     self.latest_wall_distances = result.wall_distances;
                     self.latest_position = result.position;
                     self.latest_velocity = result.velocity;
-                    if LOG_DETECTION {
+                    if debug {
                         println!(
                             "Detected: Wall {:?}, Open {:?}, Object {:?} (bins={})",
                             result.closest_wall,

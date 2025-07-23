@@ -412,7 +412,7 @@ async fn main(spawner: Spawner) {
             logic.feed_event(event);
         }
 
-        logic.step(Some(&mut publisher));
+        logic.step(Some(&mut publisher), shared::LOG_DETECTION);
 
         BATTERY_PRESENT.store(logic.battery_present, Ordering::Relaxed);
 
