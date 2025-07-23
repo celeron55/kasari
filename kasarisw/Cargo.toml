@@ -47,11 +47,14 @@ nb = "1.1.0"
 esp-wifi = { version = "0.15.0", features = ["esp32", "wifi"] }
 embassy-net = { version = "0.7.0", features = [ "tcp", "udp", "dhcpv4", "medium-ethernet"] }
 esp-alloc = "0.8.0"
+esp-bootloader-esp-idf = "0.1.0"
+esp-storage = { version = "0.7.0", features = ["esp32"] }
+embedded-storage = "0.3.1"
 
 [profile.dev]
 # Rust debug is too slow.
 # For debug builds always builds with some optimization
-opt-level = "s"
+opt-level = 2  # Would be 's', but esp-storage requires 2
 
 [profile.release]
 codegen-units    = 1     # LLVM can perform better optimizations using a single thread
@@ -59,5 +62,5 @@ debug            = 2
 debug-assertions = false
 incremental      = false
 lto              = 'fat'
-opt-level        = 's'
+opt-level        = 2  # Would be 's', but esp-storage requires 2
 overflow-checks  = false

@@ -32,7 +32,7 @@ pub const LOG_MOTOR_CONTROL: bool = false;
 pub const LOG_VBAT: bool = false;
 pub const LOG_DETECTION: bool = false;
 
-pub type EventChannel = PubSubChannel<CriticalSectionRawMutex, kasari::InputEvent, 32, 2, 6>;
+pub type EventChannel = PubSubChannel<CriticalSectionRawMutex, kasari::InputEvent, 32, 3, 6>;
 pub static EVENT_CHANNEL: StaticCell<EventChannel> = StaticCell::new();
 
 pub fn get_current_timestamp() -> u64 {
@@ -510,7 +510,7 @@ pub mod kasari {
             &mut self,
             timestamp: u64,
             publisher: Option<
-                &mut embassy_sync::pubsub::Publisher<CriticalSectionRawMutex, InputEvent, 32, 2, 6>,
+                &mut embassy_sync::pubsub::Publisher<CriticalSectionRawMutex, InputEvent, 32, 3, 6>,
             >,
             debug: bool,
         ) {

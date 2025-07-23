@@ -46,6 +46,13 @@ use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use critical_section::Mutex;
 use ringbuffer::RingBuffer;
 
+use esp_bootloader_esp_idf::esp_app_desc; // Added for app descriptor
+esp_app_desc!(); // Populates the ESP_APP_DESC static with defaults
+
+use embedded_storage::nor_flash::{NorFlash, ReadNorFlash};
+use esp_storage::FlashStorage;
+use libm::fabsf;
+
 mod sensors;
 mod shared;
 
@@ -125,6 +132,23 @@ static mut MOTOR_TIMER_REF: Option<&'static Mutex<RefCell<Option<TimgTimer>>>> =
 static MOTOR_UPDATE_COUNT: AtomicU32 = AtomicU32::new(0);
 
 static BATTERY_PRESENT: AtomicBool = AtomicBool::new(false);
+
+const LOG_FLASH_OFFSET: u32 = 0x300000;
+const LOG_FLASH_SIZE: u32 = 0x100000;
+
+const BATCH_FLUSH_SIZE: usize = 4096;
+const BATCH_DATA_SIZE: usize = BATCH_FLUSH_SIZE - 4; // Reserve 4 bytes for sequence number
+const RAM_BUFFER_SIZE: usize = 8192;
+
+static LOG_BUFFER: StaticCell<Mutex<RefCell<ConstGenericRingBuffer<u8, RAM_BUFFER_SIZE>>>> =
+    StaticCell::new();
+static LOGGING_ACTIVE: AtomicBool = AtomicBool::new(false);
+static LOG_WRITE_POS: AtomicU32 = AtomicU32::new(0);
+static LOG_SEQ: AtomicU32 = AtomicU32::new(0);
+static LIDAR_COUNT: AtomicU32 = AtomicU32::new(0);
+static LAST_HIGH_RPM_TS: AtomicU32 = AtomicU32::new(0);
+
+static FLASH_STORAGE: StaticCell<Mutex<RefCell<FlashStorage>>> = StaticCell::new();
 
 #[esp_hal_embassy::main]
 async fn main(spawner: Spawner) {
@@ -320,6 +344,43 @@ async fn main(spawner: Spawner) {
         .configure_rx(rc_receiver_ch1_pinmap, rx_config)
         .unwrap();
 
+    // Flash storage
+    let flash_storage = FLASH_STORAGE.init(Mutex::new(RefCell::new(FlashStorage::new())));
+
+    // Scan flash to find next write position and sequence
+    let mut max_seq: u32 = 0;
+    let mut max_pos: u32 = 0;
+    let mut all_erased = true;
+    for i in 0..(LOG_FLASH_SIZE / BATCH_FLUSH_SIZE as u32) {
+        let pos = i * BATCH_FLUSH_SIZE as u32;
+        let mut buf4 = [0u8; 4];
+        critical_section::with(|cs| {
+            let mut storage = flash_storage.borrow(cs).borrow_mut();
+            let _ = storage.read(LOG_FLASH_OFFSET + pos, &mut buf4);
+        });
+        let seq = u32::from_le_bytes(buf4);
+        if seq != 0xFFFFFFFF {
+            all_erased = false;
+            if seq > max_seq || (max_seq == 0 && seq == 0) {
+                // Handle wrap-around if needed, but u32 is large
+                max_seq = seq;
+                max_pos = pos;
+            }
+        }
+    }
+    let next_pos = if all_erased {
+        0
+    } else {
+        (max_pos + BATCH_FLUSH_SIZE as u32) % LOG_FLASH_SIZE
+    };
+    let next_seq = if all_erased {
+        0
+    } else {
+        max_seq.wrapping_add(1)
+    };
+    LOG_WRITE_POS.store(next_pos, Ordering::Relaxed);
+    LOG_SEQ.store(next_seq, Ordering::Relaxed);
+
     // Spawn tasks
     spawner.spawn(sensors::lidar_publisher(event_channel)).ok();
     spawner
@@ -328,6 +389,8 @@ async fn main(spawner: Spawner) {
     spawner
         .spawn(sensors::rmt_task(rmt_ch0, event_channel))
         .ok();
+
+    spawner.spawn(log_task(event_channel, flash_storage)).ok();
 
     // Initialize the Wi-Fi controller
     let esp_wifi_ctrl = &*mk_static!(
@@ -384,6 +447,9 @@ async fn main(spawner: Spawner) {
     spawner
         .spawn(listener_task(ap_stack, sta_stack, event_channel))
         .ok();
+    spawner
+        .spawn(download_task(ap_stack, sta_stack, flash_storage))
+        .ok();
 
     // Main loop
     let mut logic = shared::kasari::MainLogic::new(false);
@@ -434,6 +500,17 @@ async fn main(spawner: Spawner) {
                 modulator.mcp = None;
             }
         });
+
+        let current_ts = embassy_time::Instant::now().as_millis() as u32;
+        if libm::fabsf(logic.detector.rpm) > 500.0 {
+            LAST_HIGH_RPM_TS.store(current_ts, Ordering::Relaxed);
+        }
+        let time_since_high_rpm = current_ts.wrapping_sub(LAST_HIGH_RPM_TS.load(Ordering::Relaxed));
+        if time_since_high_rpm < 3000 {
+            LOGGING_ACTIVE.store(true, Ordering::Relaxed);
+        } else {
+            LOGGING_ACTIVE.store(false, Ordering::Relaxed);
+        }
 
         Timer::after_millis(20).await;
     }
@@ -799,5 +876,149 @@ async fn listener_task(
         socket.close();
         Timer::after(Duration::from_millis(1000)).await;
         socket.abort();
+    }
+}
+
+#[embassy_executor::task]
+async fn download_task(
+    ap_stack: embassy_net::Stack<'static>,
+    sta_stack: embassy_net::Stack<'static>,
+    flash_storage: &'static Mutex<RefCell<FlashStorage>>,
+) {
+    let mut ap_rx_buffer = [0; 512];
+    let mut ap_tx_buffer = [0; 512];
+    let mut sta_rx_buffer = [0; 512];
+    let mut sta_tx_buffer = [0; 512];
+
+    let mut ap_socket = TcpSocket::new(ap_stack, &mut ap_rx_buffer, &mut ap_tx_buffer);
+    let mut sta_socket = TcpSocket::new(sta_stack, &mut sta_rx_buffer, &mut sta_tx_buffer);
+
+    loop {
+        println!("Wait for download connection on port 8081...");
+        let either = select(
+            ap_socket.accept(IpListenEndpoint {
+                addr: None,
+                port: 8081,
+            }),
+            sta_socket.accept(IpListenEndpoint {
+                addr: None,
+                port: 8081,
+            }),
+        )
+        .await;
+
+        let (r, socket) = match either {
+            Either::First(r) => (r, &mut ap_socket),
+            Either::Second(r) => (r, &mut sta_socket),
+        };
+
+        if let Err(e) = r {
+            println!("Accept error: {:?}", e);
+            continue;
+        }
+
+        println!("Download connected!");
+        socket.set_timeout(None);
+
+        // Dump all flash log data
+        for i in 0..(LOG_FLASH_SIZE / BATCH_FLUSH_SIZE as u32) {
+            let pos = i * BATCH_FLUSH_SIZE as u32;
+            let mut buf = [0u8; BATCH_FLUSH_SIZE];
+            critical_section::with(|cs| {
+                let mut storage = flash_storage.borrow(cs).borrow_mut();
+                let _ = storage.read(LOG_FLASH_OFFSET + pos, &mut buf);
+            });
+            if let Err(e) = socket.write_all(&buf).await {
+                println!("Write error during download: {:?}", e);
+                break;
+            }
+        }
+
+        // Clear the storage
+        for i in 0..(LOG_FLASH_SIZE / BATCH_FLUSH_SIZE as u32) {
+            let pos = i * BATCH_FLUSH_SIZE as u32;
+            critical_section::with(|cs| {
+                let mut storage = flash_storage.borrow(cs).borrow_mut();
+                let _ = storage.erase(
+                    LOG_FLASH_OFFSET + pos,
+                    LOG_FLASH_OFFSET + pos + BATCH_FLUSH_SIZE as u32,
+                );
+            });
+        }
+        LOG_WRITE_POS.store(0, Ordering::Relaxed);
+        LOG_SEQ.store(0, Ordering::Relaxed);
+
+        println!("Download complete and storage cleared.");
+
+        socket.close();
+        Timer::after(Duration::from_millis(1000)).await;
+        socket.abort();
+    }
+}
+
+#[embassy_executor::task]
+async fn log_task(
+    event_channel: &'static shared::EventChannel,
+    flash_storage: &'static Mutex<RefCell<FlashStorage>>,
+) {
+    use embedded_storage::nor_flash::{NorFlash, ReadNorFlash};
+
+    let mut subscriber = event_channel.subscriber().unwrap();
+    let ram_buffer = LOG_BUFFER.init(Mutex::new(RefCell::new(ConstGenericRingBuffer::new())));
+
+    loop {
+        let event = match subscriber.next_message().await {
+            embassy_sync::pubsub::WaitResult::Message(event) => event,
+            _ => continue,
+        };
+
+        if !LOGGING_ACTIVE.load(Ordering::Relaxed) {
+            continue;
+        }
+
+        let serialized = kasari::serialize_event(&event);
+        critical_section::with(|cs| {
+            let mut buf = ram_buffer.borrow(cs).borrow_mut();
+            for &byte in &serialized {
+                if buf.is_full() {
+                    break;
+                }
+                buf.push(byte);
+            }
+        });
+
+        critical_section::with(|cs| {
+            let mut buf = ram_buffer.borrow(cs).borrow_mut();
+            if buf.len() >= BATCH_DATA_SIZE {
+                let pos = LOG_WRITE_POS.load(Ordering::Relaxed);
+                let seq = LOG_SEQ.fetch_add(1, Ordering::Relaxed);
+
+                critical_section::with(|inner_cs| {
+                    let mut storage = flash_storage.borrow(inner_cs).borrow_mut();
+                    let _ = storage.erase(
+                        LOG_FLASH_OFFSET + pos,
+                        LOG_FLASH_OFFSET + pos + BATCH_FLUSH_SIZE as u32,
+                    );
+                });
+
+                let mut temp = [0u8; BATCH_FLUSH_SIZE];
+                temp[0..4].copy_from_slice(&seq.to_le_bytes());
+                for i in 0..BATCH_DATA_SIZE {
+                    temp[4 + i] = buf.dequeue().unwrap();
+                }
+
+                critical_section::with(|inner_cs| {
+                    let mut storage = flash_storage.borrow(inner_cs).borrow_mut();
+                    let _ = storage.write(LOG_FLASH_OFFSET + pos, &temp);
+                });
+
+                let new_pos = (pos + BATCH_FLUSH_SIZE as u32) % LOG_FLASH_SIZE;
+                LOG_WRITE_POS.store(new_pos, Ordering::Relaxed);
+                println!(
+                    "Logged {} bytes at 0x{:x} with seq {}",
+                    BATCH_DATA_SIZE, pos, seq
+                );
+            }
+        });
     }
 }

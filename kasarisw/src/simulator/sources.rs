@@ -266,15 +266,15 @@ impl EventSource for FileEventSource {
     }
 }
 
-static CHANNEL: StaticCell<PubSubChannel<CriticalSectionRawMutex, InputEvent, 32, 2, 6>> =
+static CHANNEL: StaticCell<PubSubChannel<CriticalSectionRawMutex, InputEvent, 32, 3, 6>> =
     StaticCell::new();
 
 pub struct SimEventSource {
     control_logic: MainLogic,
     control_publisher:
-        embassy_sync::pubsub::Publisher<'static, CriticalSectionRawMutex, InputEvent, 32, 2, 6>,
+        embassy_sync::pubsub::Publisher<'static, CriticalSectionRawMutex, InputEvent, 32, 3, 6>,
     control_subscriber:
-        embassy_sync::pubsub::Subscriber<'static, CriticalSectionRawMutex, InputEvent, 32, 2, 6>,
+        embassy_sync::pubsub::Subscriber<'static, CriticalSectionRawMutex, InputEvent, 32, 3, 6>,
     event_buffer: VecDeque<InputEvent>,
     modulator: kasari::MotorModulator,
     robot: Robot,
