@@ -506,7 +506,7 @@ async fn main(spawner: Spawner) {
             LAST_HIGH_RPM_TS.store(current_ts, Ordering::Relaxed);
         }
         let time_since_high_rpm = current_ts.wrapping_sub(LAST_HIGH_RPM_TS.load(Ordering::Relaxed));
-        if time_since_high_rpm < 3000 {
+        if time_since_high_rpm < 3000 || embassy_time::Instant::now().as_millis() < 3000 {
             LOGGING_ACTIVE.store(true, Ordering::Relaxed);
         } else {
             LOGGING_ACTIVE.store(false, Ordering::Relaxed);
