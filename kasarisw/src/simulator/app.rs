@@ -184,9 +184,9 @@ impl eframe::App for MyApp {
 
         // Object detection
         let (closest_wall, open_space, object_pos) = (
-            self.event_source.get_logic().unwrap().latest_closest_wall,
-            self.event_source.get_logic().unwrap().latest_open_space,
-            self.event_source.get_logic().unwrap().latest_object_pos,
+            self.event_source.get_logic().unwrap().detection_state.closest_wall,
+            self.event_source.get_logic().unwrap().detection_state.open_space,
+            self.event_source.get_logic().unwrap().detection_state.object_pos,
         );
 
         if self.debug && processed_events {
@@ -337,7 +337,7 @@ impl eframe::App for MyApp {
                 let left_phi: f32 = PI / 2.0 + self.event_source.get_logic().unwrap().detector.theta;
                 let right_phi: f32 = -PI / 2.0 + self.event_source.get_logic().unwrap().detector.theta;
                 let left_pos: [f64; 2] = [motor_radius * left_phi.cos() as f64, motor_radius * left_phi.sin() as f64];
-                let right_pos: [f64; 2] = [motor_radius * right_phi.cos() as f64, motor_radius * right_phi.sin() as f64];
+                let right_pos: [f64; 2] = [motor_radius * right_phi.cos() as f64, right_phi.sin() as f64];
                 let left_dir: [f64; 2] = [-left_phi.sin() as f64, left_phi.cos() as f64];
                 let right_dir: [f64; 2] = [-right_phi.sin() as f64, right_phi.cos() as f64];
                 let left_vec: [f64; 2] = [left_dir[0] * left_rpm as f64 * speed_scale, left_dir[1] * left_rpm as f64 * speed_scale];

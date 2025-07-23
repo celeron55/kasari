@@ -105,22 +105,77 @@ pub mod kasari {
         pub movement_y: f32,
     }
 
+    /// Enum for control modes to improve readability and type safety.
+    #[derive(Copy, Clone, PartialEq, Eq)]
+    pub enum ControlMode {
+        RcReceiver = 0,
+        ManualWifi = 1,
+        Autonomous = 2,
+    }
+
+    impl From<u8> for ControlMode {
+        fn from(value: u8) -> Self {
+            match value {
+                1 => Self::ManualWifi,
+                2 => Self::Autonomous,
+                _ => Self::RcReceiver,
+            }
+        }
+    }
+
+    /// Struct for holding detection results to separate concerns.
+    #[derive(Clone, Copy)]
+    pub struct DetectionState {
+        pub closest_wall: (f32, f32),
+        pub open_space: (f32, f32),
+        pub object_pos: (f32, f32),
+        pub wall_distances: (f32, f32, f32, f32),
+        pub position: (f32, f32),
+        pub velocity: (f32, f32),
+    }
+
+    impl Default for DetectionState {
+        fn default() -> Self {
+            Self {
+                closest_wall: (0.0, 0.0),
+                open_space: (0.0, 0.0),
+                object_pos: (0.0, 0.0),
+                wall_distances: (0.0, 0.0, 0.0, 0.0),
+                position: (0.0, 0.0),
+                velocity: (0.0, 0.0),
+            }
+        }
+    }
+
+    /// Struct for control targets to make state clearer.
+    #[derive(Clone, Copy)]
+    pub struct ControlTargets {
+        pub rotation_speed: f32,
+        pub movement_x: f32,
+        pub movement_y: f32,
+    }
+
+    impl Default for ControlTargets {
+        fn default() -> Self {
+            Self {
+                rotation_speed: 0.0,
+                movement_x: 0.0,
+                movement_y: 0.0,
+            }
+        }
+    }
+
     pub struct MainLogic {
         pub motor_control_plan: Option<MotorControlPlan>,
         pub detector: ObjectDetector,
+        pub detection_state: DetectionState,
         vbat: f32,
         vbat_ok: bool,
         pub battery_present: bool,
-        control_mode: u8,
+        control_mode: ControlMode,
         control_rotation_speed: f32,
         control_movement_speed: f32,
         control_turning_speed: f32,
-        pub latest_closest_wall: (f32, f32),
-        pub latest_open_space: (f32, f32),
-        pub latest_object_pos: (f32, f32),
-        pub latest_wall_distances: (f32, f32, f32, f32),
-        pub latest_position: (f32, f32),
-        pub latest_velocity: (f32, f32),
         last_planner_ts: u64,
         autonomous_enabled: bool,
         autonomous_start_ts: Option<u64>,
@@ -128,11 +183,9 @@ pub mod kasari {
         autonomous_duty_cycle: f32,
         last_rpm_update_ts: Option<u64>,
         current_rotation_speed: f32,
+        target: ControlTargets,
         pub reverse_rotation: bool,
         reverse_rotation_ts: u64,
-        target_rotation_speed: f32,
-        movement_x: f32,
-        movement_y: f32,
     }
 
     impl MainLogic {
@@ -140,19 +193,14 @@ pub mod kasari {
             Self {
                 motor_control_plan: None,
                 detector: ObjectDetector::new(),
+                detection_state: DetectionState::default(),
                 vbat: 0.0,
                 vbat_ok: false,
                 battery_present: false,
-                control_mode: 0,
+                control_mode: ControlMode::RcReceiver,
                 control_rotation_speed: 0.0,
                 control_movement_speed: 0.0,
                 control_turning_speed: 0.0,
-                latest_closest_wall: (0.0, 0.0),
-                latest_open_space: (0.0, 0.0),
-                latest_object_pos: (0.0, 0.0),
-                latest_wall_distances: (0.0, 0.0, 0.0, 0.0),
-                latest_position: (0.0, 0.0),
-                latest_velocity: (0.0, 0.0),
                 last_planner_ts: 0,
                 autonomous_enabled: false,
                 autonomous_start_ts: None,
@@ -160,11 +208,35 @@ pub mod kasari {
                 autonomous_duty_cycle: 0.6,            // 60% towards center, 40% towards object
                 last_rpm_update_ts: None,
                 current_rotation_speed: 0.0,
+                target: ControlTargets::default(),
                 reverse_rotation,
                 reverse_rotation_ts: 0,
-                target_rotation_speed: 0.0,
-                movement_x: 0.0,
-                movement_y: 0.0,
+            }
+        }
+
+        fn reset_targets(&mut self) {
+            self.target = ControlTargets::default();
+        }
+
+        /// Central method to update control targets based on current mode and inputs.
+        /// This helps avoid duplicated logic in event handlers.
+        fn update_targets(&mut self) {
+            if !self.vbat_ok {
+                self.reset_targets();
+                self.motor_control_plan = None;
+                return;
+            }
+
+            match self.control_mode {
+                ControlMode::ManualWifi => {
+                    self.target.rotation_speed = self.control_rotation_speed;
+                    self.target.movement_x = 0.0;
+                    self.target.movement_y = 0.0;
+                }
+                ControlMode::RcReceiver if !self.autonomous_enabled => {
+                    self.reset_targets();
+                }
+                _ => {} // Autonomous or RC with autonomous: handled in autonomous_update
             }
         }
 
@@ -173,11 +245,9 @@ pub mod kasari {
             self.detector.rpm = self.detector.rpm.abs() * self.current_rotation_speed.signum();
 
             match event {
-                InputEvent::Lidar(_timestamp, _d1, _d2, _d3, _d4) => {}
-                InputEvent::Accelerometer(_timestamp, _a_y, _a_z) => {}
-                InputEvent::Receiver(timestamp, _ch, pulse_length) => {
-                    // Mode 0 = RC Receiver control mode
-                    if self.control_mode != 0 {
+                InputEvent::Lidar(..) | InputEvent::Accelerometer(..) | InputEvent::Planner(..) => {}
+                InputEvent::Receiver(_timestamp, _ch, pulse_length) => {
+                    if self.control_mode != ControlMode::RcReceiver {
                         return;
                     }
                     if !self.vbat_ok {
@@ -194,20 +264,14 @@ pub mod kasari {
                                     pulse_length, stick_percent
                                 );
                             }
-                            if stick_percent >= 5.0 {
-                                self.autonomous_enabled = true;
-                            } else {
-                                self.autonomous_enabled = false;
-                                self.target_rotation_speed = 0.0;
-                                self.movement_x = 0.0;
-                                self.movement_y = 0.0;
+                            self.autonomous_enabled = stick_percent >= 5.0;
+                            if !self.autonomous_enabled {
+                                self.reset_targets();
                             }
                         }
                         None => {
                             self.autonomous_enabled = false;
-                            self.target_rotation_speed = 0.0;
-                            self.movement_x = 0.0;
-                            self.movement_y = 0.0;
+                            self.reset_targets();
                             self.motor_control_plan = None;
                         }
                     }
@@ -230,188 +294,192 @@ pub mod kasari {
                             self.vbat, self.vbat_ok, self.battery_present
                         );
                     }
+                    self.update_targets();
                 }
                 InputEvent::WifiControl(_timestamp, mode, r, m, t) => {
                     if LOG_WIFI_CONTROL {
                         println!("WifiControl({}, {}, {}, {})", mode, r, m, t);
                     }
-                    self.control_mode = mode;
-                    self.autonomous_enabled = mode == 2;
+                    self.control_mode = ControlMode::from(mode);
+                    self.autonomous_enabled = self.control_mode == ControlMode::Autonomous;
                     if !self.autonomous_enabled {
                         self.autonomous_start_ts = None;
+                        if self.control_mode == ControlMode::RcReceiver {
+                            // When switching to RC via Wifi mode=0, respect current autonomous_enabled from RC
+                            // But if switching from manual/autonomous to RC, reset if not already set
+                            if self.control_mode != ControlMode::RcReceiver {
+                                self.reset_targets();
+                            }
+                        } else {
+                            self.reset_targets();
+                        }
                     }
                     self.control_rotation_speed = r;
                     self.control_movement_speed = m;
                     self.control_turning_speed = t;
-                    if !self.vbat_ok {
-                        self.motor_control_plan = None;
-                    }
-                    if self.control_mode == 1 {
-                        self.target_rotation_speed = self.control_rotation_speed;
-                        self.movement_x = 0.0;
-                        self.movement_y = 0.0;
-                    } else if self.control_mode != 2 {
-                        self.target_rotation_speed = 0.0;
-                        self.movement_x = 0.0;
-                        self.movement_y = 0.0;
-                    }
+                    self.update_targets();
                 }
-                InputEvent::Planner(..) => {}
             }
         }
 
-        pub fn autonomous_update(&mut self, ts: u64) {
+        fn compute_autonomous_movement(&self) -> (f32, f32) {
+            let wall_x = self.detection_state.closest_wall.0;
+            let wall_y = self.detection_state.closest_wall.1;
+            let wall_dist = sqrtf(wall_x * wall_x + wall_y * wall_y);
+            let obj_x = self.detection_state.object_pos.0;
+            let obj_y = self.detection_state.object_pos.1;
+            let obj_dist = sqrtf(obj_x * obj_x + obj_y * obj_y);
+
+            let detection_failing = self.detector.arena_w == 0.0 || obj_x == 100.0;
+
+            if detection_failing {
+                // Fallback: move away from closest wall towards open space
+                let away_x = -wall_x;
+                let away_y = -wall_y;
+                let target_x = (away_x + self.detection_state.open_space.0) / 2.0;
+                let target_y = (away_y + self.detection_state.open_space.1) / 2.0;
+                let target_len = sqrtf(target_x * target_x + target_y * target_y);
+                if target_len > 0.0 {
+                    (target_x / target_len * 1.0, target_y / target_len * 1.0)
+                } else {
+                    (0.0, 0.0)
+                }
+            } else {
+                // Normal mode: alternate between center and object
+                let cycle_ts = get_current_timestamp() - self.autonomous_start_ts.unwrap_or(0);
+                let phase = (cycle_ts % self.autonomous_cycle_period_us) as f32
+                    / self.autonomous_cycle_period_us as f32;
+                // Pick a target and a speed depending on what the target is
+                let (target_x, target_y, speed_suggestion) = if phase
+                    < self.autonomous_duty_cycle
+                    || fabsf(self.detector.rpm) < MIN_ATTACK_RPM
+                {
+                    // Towards center
+                    let center_x = self.detection_state.open_space.0;
+                    let center_y = self.detection_state.open_space.1;
+                    let center_len = sqrtf(center_x * center_x + center_y * center_y);
+                    let obj_len = sqrtf(obj_x * obj_x + obj_y * obj_y);
+
+                    // Check if object is nearly aligned with center and
+                    // closer than center, meaning we have to go around the
+                    // object in order to reach center
+                    let angle_center = atan2f(center_y, center_x);
+                    let angle_object = atan2f(obj_y, obj_x);
+                    let angle_diff =
+                        fabsf(rem_euclid_f32(angle_center - angle_object + PI, 2.0 * PI) - PI);
+                    if obj_len < center_len
+                        && angle_diff < PI / 4.0
+                        && center_len > 0.0
+                        && obj_len > 0.0
+                    {
+                        // Compute perpendicular vectors
+                        let perp_x1 = -center_y;
+                        let perp_y1 = center_x;
+                        let perp_x2 = center_y;
+                        let perp_y2 = -center_x;
+
+                        // Choose the one farther from object
+                        let dot1 = perp_x1 * obj_x + perp_y1 * obj_y;
+                        let dot2 = perp_x2 * obj_x + perp_y2 * obj_y;
+                        let (perp_x, perp_y) = if dot1.abs() > dot2.abs() {
+                            (perp_x1, perp_y1)
+                        } else {
+                            (perp_x2, perp_y2)
+                        };
+
+                        // Normalize perp
+                        let perp_len = sqrtf(perp_x * perp_x + perp_y * perp_y);
+                        let norm_perp_x = if perp_len > 0.0 {
+                            perp_x / perp_len
+                        } else {
+                            0.0
+                        };
+                        let norm_perp_y = if perp_len > 0.0 {
+                            perp_y / perp_len
+                        } else {
+                            0.0
+                        };
+
+                        // Blend
+                        let k = 0.5; // Bias factor
+                        let blended_x = center_x + k * norm_perp_x * center_len;
+                        let blended_y = center_y + k * norm_perp_y * center_len;
+                        (blended_x, blended_y, 1.0)
+                    } else {
+                        // Not aligned, use center directly
+                        (center_x, center_y, 1.0)
+                    }
+                } else {
+                    // Towards object
+                    (obj_x, obj_y, 2.0)
+                };
+                let target_len = sqrtf(target_x * target_x + target_y * target_y);
+                let intended_speed = if target_len > 0.0 {
+                    speed_suggestion
+                } else {
+                    0.0
+                };
+                let intended_x = if target_len > 0.0 {
+                    target_x / target_len * intended_speed
+                } else {
+                    0.0
+                };
+                let intended_y = if target_len > 0.0 {
+                    target_y / target_len * intended_speed
+                } else {
+                    0.0
+                };
+
+                // Cancel unwanted velocity
+                // NOTE: This doesn't work properly so it is commented out
+                /*let vel_x = self.detection_state.velocity.0;
+                let vel_y = self.detection_state.velocity.1;
+                let vel_mag = sqrtf(vel_x * vel_x + vel_y * vel_y);
+                if vel_mag > 0.0 {
+                    let intended_dot_vel = intended_x * vel_x + intended_y * vel_y;
+                    let proj = intended_dot_vel / (vel_mag * intended_speed);
+                    let unwanted_vel_x = vel_x - proj * intended_x;
+                    let unwanted_vel_y = vel_y - proj * intended_y;
+                    let gain = 0.5;
+                    let movement_x = intended_x - gain * unwanted_vel_x / vel_mag;
+                    let movement_y = intended_y - gain * unwanted_vel_y / vel_mag;
+                    // Re-normalize
+                    let new_len = sqrtf(movement_x * movement_x + movement_y * movement_y);
+                    if new_len > 0.0 {
+                        (movement_x / new_len, movement_y / new_len)
+                    } else {
+                        (0.0, 0.0)
+                    }
+                } else*/
+                (intended_x, intended_y)
+            }
+        }
+
+        fn update_autonomous_targets(&mut self, ts: u64) {
             if !self.vbat_ok {
-                self.motor_control_plan = None;
+                self.reset_targets();
                 return;
             }
 
+            // Handle rotation reversal if stuck
             if ts > self.reverse_rotation_ts + 5_000_000 && self.detector.rpm.abs() < 150.0 {
                 self.reverse_rotation_ts = ts;
                 self.reverse_rotation = !self.reverse_rotation;
             }
 
-            self.target_rotation_speed =
+            self.target.rotation_speed =
                 TARGET_RPM * if self.reverse_rotation { -1.0 } else { 1.0 };
 
-            self.movement_x = 0.0;
-            self.movement_y = 0.0;
-
             if fabsf(self.detector.rpm) >= MIN_MOVE_RPM {
-                let wall_x = self.latest_closest_wall.0;
-                let wall_y = self.latest_closest_wall.1;
-                let wall_dist = sqrtf(wall_x * wall_x + wall_y * wall_y);
-                let obj_x = self.latest_object_pos.0;
-                let obj_y = self.latest_object_pos.1;
-                let obj_dist = sqrtf(obj_x * obj_x + obj_y * obj_y);
-
-                let detection_failing = self.detector.arena_w == 0.0 || obj_x == 100.0;
-
-                if detection_failing {
-                    // Fallback: move away from closest wall towards open space
-                    let away_x = -wall_x;
-                    let away_y = -wall_y;
-                    let target_x = (away_x + self.latest_open_space.0) / 2.0;
-                    let target_y = (away_y + self.latest_open_space.1) / 2.0;
-                    let target_len = sqrtf(target_x * target_x + target_y * target_y);
-                    if target_len > 0.0 {
-                        self.movement_x = target_x / target_len * 1.0;
-                        self.movement_y = target_y / target_len * 1.0;
-                    }
-                } else {
-                    // Normal mode: alternate between center and object
-                    if self.autonomous_start_ts.is_none() {
-                        self.autonomous_start_ts = Some(ts);
-                    }
-                    let cycle_ts = ts - self.autonomous_start_ts.unwrap();
-                    let phase = (cycle_ts % self.autonomous_cycle_period_us) as f32
-                        / self.autonomous_cycle_period_us as f32;
-                    // Pick a target and a speed depending on what the target is
-                    let ((target_x, target_y), speed_suggestion) = if phase
-                        < self.autonomous_duty_cycle
-                        || fabsf(self.detector.rpm) < MIN_ATTACK_RPM
-                    {
-                        // Towards center
-                        let center_x = self.latest_open_space.0;
-                        let center_y = self.latest_open_space.1;
-                        let center_len = sqrtf(center_x * center_x + center_y * center_y);
-                        let obj_len = sqrtf(obj_x * obj_x + obj_y * obj_y);
-
-                        // Check if object is nearly aligned with center and
-                        // closer than center, meaning we have to go around the
-                        // object in order to reach center
-                        let angle_center = atan2f(center_y, center_x);
-                        let angle_object = atan2f(obj_y, obj_x);
-                        let angle_diff =
-                            fabsf(rem_euclid_f32(angle_center - angle_object + PI, 2.0 * PI) - PI);
-                        if obj_len < center_len
-                            && angle_diff < PI / 4.0
-                            && center_len > 0.0
-                            && obj_len > 0.0
-                        {
-                            // Compute perpendicular vectors
-                            let perp_x1 = -center_y;
-                            let perp_y1 = center_x;
-                            let perp_x2 = center_y;
-                            let perp_y2 = -center_x;
-
-                            // Choose the one farther from object
-                            let dot1 = perp_x1 * obj_x + perp_y1 * obj_y;
-                            let dot2 = perp_x2 * obj_x + perp_y2 * obj_y;
-                            let (perp_x, perp_y) = if dot1.abs() > dot2.abs() {
-                                (perp_x1, perp_y1)
-                            } else {
-                                (perp_x2, perp_y2)
-                            };
-
-                            // Normalize perp
-                            let perp_len = sqrtf(perp_x * perp_x + perp_y * perp_y);
-                            let norm_perp_x = if perp_len > 0.0 {
-                                perp_x / perp_len
-                            } else {
-                                0.0
-                            };
-                            let norm_perp_y = if perp_len > 0.0 {
-                                perp_y / perp_len
-                            } else {
-                                0.0
-                            };
-
-                            // Blend
-                            let k = 0.5; // Bias factor
-                            let blended_x = center_x + k * norm_perp_x * center_len;
-                            let blended_y = center_y + k * norm_perp_y * center_len;
-                            ((blended_x, blended_y), 1.0)
-                        } else {
-                            // Not aligned, use center directly
-                            ((center_x, center_y), 1.0)
-                        }
-                    } else {
-                        // Towards object
-                        ((obj_x, obj_y), 2.0)
-                    };
-                    let target_len = sqrtf(target_x * target_x + target_y * target_y);
-                    let intended_speed = if target_len > 0.0 {
-                        speed_suggestion
-                    } else {
-                        0.0
-                    };
-                    let intended_x = if target_len > 0.0 {
-                        target_x / target_len * intended_speed
-                    } else {
-                        0.0
-                    };
-                    let intended_y = if target_len > 0.0 {
-                        target_y / target_len * intended_speed
-                    } else {
-                        0.0
-                    };
-
-                    // Cancel unwanted velocity
-                    // NOTE: This doesn't work properly so it is commented out
-                    /*let vel_x = self.latest_velocity.0;
-                    let vel_y = self.latest_velocity.1;
-                    let vel_mag = sqrtf(vel_x * vel_x + vel_y * vel_y);
-                    if vel_mag > 0.0 {
-                        let intended_dot_vel = intended_x * vel_x + intended_y * vel_y;
-                        let proj = intended_dot_vel / (vel_mag * intended_speed);
-                        let unwanted_vel_x = vel_x - proj * intended_x;
-                        let unwanted_vel_y = vel_y - proj * intended_y;
-                        let gain = 0.5;
-                        movement_x = intended_x - gain * unwanted_vel_x / vel_mag;
-                        movement_y = intended_y - gain * unwanted_vel_y / vel_mag;
-                        // Re-normalize
-                        let new_len = sqrtf(movement_x * movement_x + movement_y * movement_y);
-                        if new_len > 0.0 {
-                            self.movement_x /= new_len;
-                            self.movement_y /= new_len;
-                        }
-                    } else*/
-                    {
-                        self.movement_x = intended_x;
-                        self.movement_y = intended_y;
-                    }
-                }
+                let (x, y) = self.compute_autonomous_movement();
+                self.target.movement_x = x;
+                self.target.movement_y = y;
+            } else {
+                self.target.movement_x = 0.0;
+                self.target.movement_y = 0.0;
+            }
+            if self.autonomous_start_ts.is_none() {
+                self.autonomous_start_ts = Some(ts);
             }
         }
 
@@ -422,7 +490,7 @@ pub mod kasari {
                 0.0
             };
             let max_rpm_delta = MAX_RPM_RAMP_RATE * dt.max(0.0);
-            let target = self.target_rotation_speed;
+            let target = self.target.rotation_speed;
             self.current_rotation_speed +=
                 (target - self.current_rotation_speed).clamp(-max_rpm_delta, max_rpm_delta);
 
@@ -450,12 +518,14 @@ pub mod kasari {
                 self.last_planner_ts = timestamp;
 
                 let result = self.detector.detect_objects(debug);
-                self.latest_closest_wall = result.closest_wall;
-                self.latest_open_space = result.open_space;
-                self.latest_object_pos = result.object_pos;
-                self.latest_wall_distances = result.wall_distances;
-                self.latest_position = result.position;
-                self.latest_velocity = result.velocity;
+                self.detection_state = DetectionState {
+                    closest_wall: result.closest_wall,
+                    open_space: result.open_space,
+                    object_pos: result.object_pos,
+                    wall_distances: result.wall_distances,
+                    position: result.position,
+                    velocity: result.velocity,
+                };
                 if debug {
                     println!(
                         "Detected: Wall {:?}, Open {:?}, Object {:?} (bins={})",
@@ -467,14 +537,14 @@ pub mod kasari {
                 }
 
                 if self.autonomous_enabled {
-                    self.autonomous_update(timestamp);
+                    self.update_autonomous_targets(timestamp);
                 }
 
                 let plan = MotorControlPlan {
                     timestamp: timestamp,
                     rotation_speed: self.current_rotation_speed,
-                    movement_x: self.movement_x,
-                    movement_y: self.movement_y,
+                    movement_x: self.target.movement_x,
+                    movement_y: self.target.movement_y,
                 };
                 if let Some(publisher) = publisher {
                     publisher.publish_immediate(InputEvent::Planner(
@@ -494,19 +564,13 @@ pub mod kasari {
             if !self.vbat_ok {
                 self.motor_control_plan = None;
             } else {
-                if let Some(ref mut plan) = self.motor_control_plan {
-                    plan.timestamp = timestamp;
-                    plan.rotation_speed = self.current_rotation_speed;
-                    plan.movement_x = self.movement_x;
-                    plan.movement_y = self.movement_y;
-                } else {
-                    self.motor_control_plan = Some(MotorControlPlan {
-                        timestamp,
-                        rotation_speed: self.current_rotation_speed,
-                        movement_x: self.movement_x,
-                        movement_y: self.movement_y,
-                    });
-                }
+                let plan = MotorControlPlan {
+                    timestamp,
+                    rotation_speed: self.current_rotation_speed,
+                    movement_x: self.target.movement_x,
+                    movement_y: self.target.movement_y,
+                };
+                self.motor_control_plan = Some(plan);
             }
         }
     }
