@@ -211,12 +211,13 @@ impl eframe::App for MyApp {
 
         egui::CentralPanel::default().show(ctx, |ui| {
             let heading_text = format!(
-                "Real-Time Robot LiDAR Simulation\nEvents: {}, TS: {} ms, Simulator RPM: {:.2}, Measured RPM: {:.2}, Target RPM: {:.2}, flipped: {}",
+                "Real-Time Robot LiDAR Simulation\nEvents: {}, TS: {} ms, Simulator RPM: {:.2}, Measured RPM: {:.2}, Target RPM: {:.2}, flipped: {} (simulated) {} (measured)",
                 self.current_event_idx,
                 self.event_source.get_logic().unwrap().detector.last_ts.unwrap_or(0) / 1000,
                 self.event_source.get_logic().unwrap().detector.rpm,
                 measured_rpm,
                 target_rpm,
+                self.event_source.get_robot_flipped(),
                 self.event_source.get_logic().unwrap().detector.flipped,
             );
             ui.heading(heading_text);
@@ -466,6 +467,9 @@ impl eframe::App for MyApp {
             } else {
                 self.step_requested = true;
             }
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::F)) {
+			self.event_source.set_robot_flipped(!self.event_source.get_robot_flipped());
         }
         if ctx.input(|i| i.key_pressed(egui::Key::Q) || i.key_pressed(egui::Key::Escape)) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);

@@ -32,6 +32,11 @@ pub trait EventSource {
     fn get_logic_mut(&mut self) -> Option<&mut MainLogic> {
         None
     }
+    fn get_robot_flipped(&self) -> bool {
+        false
+    }
+    fn set_robot_flipped(&mut self, robot_flipped: bool) {
+    }
 }
 
 struct ReplayMirror {
@@ -488,5 +493,11 @@ impl EventSource for SimEventSource {
 
     fn get_logic(&self) -> Option<&MainLogic> {
         Some(&self.control_logic)
+    }
+    fn get_robot_flipped(&self) -> bool {
+	    self.robot_flipped
+    }
+    fn set_robot_flipped(&mut self, robot_flipped: bool) {
+	    self.robot_flipped = robot_flipped
     }
 }
