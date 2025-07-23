@@ -128,6 +128,8 @@ pub mod kasari {
         autonomous_duty_cycle: f32,
         last_rpm_update_ts: Option<u64>,
         current_rotation_speed: f32,
+        reverse_rotation: bool,
+        reverse_rotation_ts: u64,
     }
 
     impl MainLogic {
@@ -155,6 +157,8 @@ pub mod kasari {
                 autonomous_duty_cycle: 0.6,            // 60% towards center, 40% towards object
                 last_rpm_update_ts: None,
                 current_rotation_speed: 0.0,
+                reverse_rotation: false,
+                reverse_rotation_ts: 0,
             }
         }
 
@@ -269,7 +273,13 @@ pub mod kasari {
                 self.motor_control_plan = None;
                 return;
             }
-            let rotation_speed = TARGET_RPM;
+
+            if ts > self.reverse_rotation_ts + 5_000_000 && self.detector.rpm.abs() < 150.0 {
+                self.reverse_rotation_ts = ts;
+                self.reverse_rotation = !self.reverse_rotation;
+            }
+
+            let rotation_speed = TARGET_RPM * if self.reverse_rotation { -1.0 } else { 1.0 };
 
             let mut movement_x = 0.0;
             let mut movement_y = 0.0;
