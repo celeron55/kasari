@@ -37,6 +37,7 @@ impl MyApp {
         arena_width: f32,
         arena_height: f32,
         object_present: bool,
+        reverse_rotation: bool,
         robot_flipped: bool,
     ) -> Self {
         let event_source: Box<dyn EventSource> = if sim_mode {
@@ -56,8 +57,11 @@ impl MyApp {
             ))
         };
 
+        let mut logic = MainLogic::new();
+        logic.reverse_rotation = reverse_rotation;
+
         Self {
-            logic: MainLogic::new(),
+            logic,
             event_source,
             current_event_idx: 0,
             virtual_elapsed: 0.0,

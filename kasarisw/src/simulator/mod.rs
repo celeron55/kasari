@@ -47,6 +47,10 @@ struct Args {
     #[arg(long)]
     no_object: bool,
 
+    /// Whether to set the robot to rotate in reverse
+    #[arg(long)]
+    reverse_rotation: bool,
+
     /// Whether to run the robot in the flipped state
     #[arg(long)]
     robot_flipped: bool,
@@ -92,6 +96,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 args.arena_width,
                 args.arena_height,
                 args.no_object,
+                args.reverse_rotation,
                 args.robot_flipped,
             )))
         }),

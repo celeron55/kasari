@@ -128,7 +128,7 @@ pub mod kasari {
         autonomous_duty_cycle: f32,
         last_rpm_update_ts: Option<u64>,
         current_rotation_speed: f32,
-        reverse_rotation: bool,
+        pub reverse_rotation: bool,
         reverse_rotation_ts: u64,
     }
 
