@@ -93,7 +93,13 @@ impl MyApp {
             }
         }
         if matches!(event, InputEvent::Lidar(..)) {
-            self.current_lidar_points = self.event_source.get_logic().unwrap().detector.last_xys.to_vec();
+            self.current_lidar_points = self
+                .event_source
+                .get_logic()
+                .unwrap()
+                .detector
+                .last_xys
+                .to_vec();
         }
         self.current_event_idx += 1;
     }
@@ -177,8 +183,11 @@ impl eframe::App for MyApp {
         }
 
         // Object detection
-        let (closest_wall, open_space, object_pos) =
-            (self.event_source.get_logic().unwrap().latest_closest_wall, self.event_source.get_logic().unwrap().latest_open_space, self.event_source.get_logic().unwrap().latest_object_pos);
+        let (closest_wall, open_space, object_pos) = (
+            self.event_source.get_logic().unwrap().latest_closest_wall,
+            self.event_source.get_logic().unwrap().latest_open_space,
+            self.event_source.get_logic().unwrap().latest_object_pos,
+        );
 
         if self.debug && processed_events {
             println!("Simulator: ts={} theta={:.4} rpm={:.2} cw=({:.1},{:.1}) os=({:.1},{:.1}) op=({:.1},{:.1})",
@@ -469,7 +478,8 @@ impl eframe::App for MyApp {
             }
         }
         if ctx.input(|i| i.key_pressed(egui::Key::F)) {
-			self.event_source.set_robot_flipped(!self.event_source.get_robot_flipped());
+            self.event_source
+                .set_robot_flipped(!self.event_source.get_robot_flipped());
         }
         if ctx.input(|i| i.key_pressed(egui::Key::Q) || i.key_pressed(egui::Key::Escape)) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);

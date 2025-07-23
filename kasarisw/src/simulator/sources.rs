@@ -35,8 +35,7 @@ pub trait EventSource {
     fn get_robot_flipped(&self) -> bool {
         false
     }
-    fn set_robot_flipped(&mut self, robot_flipped: bool) {
-    }
+    fn set_robot_flipped(&mut self, robot_flipped: bool) {}
 }
 
 struct ReplayMirror {
@@ -51,9 +50,8 @@ impl ReplayMirror {
             debug: debug,
         }
     }
-    pub fn process_event(&mut self, event: &InputEvent) {
+    pub fn process_event(&mut self, timestamp: u64, event: &InputEvent) {
         self.logic.feed_event(event.clone());
-		self.logic.step(None, self.debug);
     }
 }
 
@@ -224,23 +222,35 @@ impl EventSource for FileEventSource {
                 self.next_real_event.take().unwrap()
             };
 
-            self.mirror.process_event(&event);
+            self.mirror.process_event(next_ts_opt.unwrap(), &event);
 
             if self.debug {
                 match event {
                     InputEvent::Lidar(ts, d1, d2, d3, d4) => println!(
                         "Mirrored Lidar ts={} d=({:.0},{:.0},{:.0},{:.0}) theta={:.4} rpm={:.2}",
-                        ts, d1, d2, d3, d4, self.mirror.logic.detector.theta, self.mirror.logic.detector.rpm
+                        ts,
+                        d1,
+                        d2,
+                        d3,
+                        d4,
+                        self.mirror.logic.detector.theta,
+                        self.mirror.logic.detector.rpm
                     ),
                     InputEvent::Accelerometer(ts, ay, az) => println!(
                         "Mirrored Accel ts={} ay={:.2} az={:.2} theta={:.4} rpm={:.2}",
-                        ts, ay, az, self.mirror.logic.detector.theta, self.mirror.logic.detector.rpm
+                        ts,
+                        ay,
+                        az,
+                        self.mirror.logic.detector.theta,
+                        self.mirror.logic.detector.rpm
                     ),
                     _ => {}
                 }
             }
 
-            self.mirror.logic.step(None, self.debug);
+            self.mirror
+                .logic
+                .step(next_ts_opt.unwrap(), None, self.debug);
 
             Some(event)
         } else {
@@ -457,7 +467,8 @@ impl SimEventSource {
             }
 
             if next_step <= next_ts {
-                self.control_logic.step(Some(&mut self.control_publisher), self.debug);
+                self.control_logic
+                    .step(next_step, Some(&mut self.control_publisher), self.debug);
                 while let Some(event) = self.control_subscriber.try_next_message_pure() {
                     self.event_buffer.push_back(event.clone());
                     if let InputEvent::Planner(ts, plan, _, _, _, _, _) = &event {
@@ -498,9 +509,9 @@ impl EventSource for SimEventSource {
         Some(&self.control_logic)
     }
     fn get_robot_flipped(&self) -> bool {
-	    self.robot_flipped
+        self.robot_flipped
     }
     fn set_robot_flipped(&mut self, robot_flipped: bool) {
-	    self.robot_flipped = robot_flipped
+        self.robot_flipped = robot_flipped
     }
 }
