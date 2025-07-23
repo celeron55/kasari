@@ -386,7 +386,7 @@ async fn main(spawner: Spawner) {
         .ok();
 
     // Main loop
-    let mut logic = shared::kasari::MainLogic::new();
+    let mut logic = shared::kasari::MainLogic::new(false);
     let mut publisher = event_channel.publisher().unwrap();
     let mut subscriber = event_channel.subscriber().unwrap();
     let mut loop_i: u64 = 0;
