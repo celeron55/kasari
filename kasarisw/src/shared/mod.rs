@@ -245,7 +245,8 @@ pub mod kasari {
             self.detector.rpm = self.detector.rpm.abs() * self.current_rotation_speed.signum();
 
             match event {
-                InputEvent::Lidar(..) | InputEvent::Accelerometer(..) | InputEvent::Planner(..) => {}
+                InputEvent::Lidar(..) | InputEvent::Accelerometer(..) | InputEvent::Planner(..) => {
+                }
                 InputEvent::Receiver(_timestamp, _ch, pulse_length) => {
                     if self.control_mode != ControlMode::RcReceiver {
                         return;
@@ -350,8 +351,7 @@ pub mod kasari {
                 let phase = (cycle_ts % self.autonomous_cycle_period_us) as f32
                     / self.autonomous_cycle_period_us as f32;
                 // Pick a target and a speed depending on what the target is
-                let (target_x, target_y, speed_suggestion) = if phase
-                    < self.autonomous_duty_cycle
+                let (target_x, target_y, speed_suggestion) = if phase < self.autonomous_duty_cycle
                     || fabsf(self.detector.rpm) < MIN_ATTACK_RPM
                 {
                     // Towards center

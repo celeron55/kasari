@@ -184,9 +184,21 @@ impl eframe::App for MyApp {
 
         // Object detection
         let (closest_wall, open_space, object_pos) = (
-            self.event_source.get_logic().unwrap().detection_state.closest_wall,
-            self.event_source.get_logic().unwrap().detection_state.open_space,
-            self.event_source.get_logic().unwrap().detection_state.object_pos,
+            self.event_source
+                .get_logic()
+                .unwrap()
+                .detection_state
+                .closest_wall,
+            self.event_source
+                .get_logic()
+                .unwrap()
+                .detection_state
+                .open_space,
+            self.event_source
+                .get_logic()
+                .unwrap()
+                .detection_state
+                .object_pos,
         );
 
         if self.debug && processed_events {
