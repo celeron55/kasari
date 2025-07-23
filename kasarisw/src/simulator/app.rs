@@ -449,19 +449,15 @@ impl eframe::App for MyApp {
 
         if ctx.input(|i| i.key_pressed(egui::Key::V)) {
             self.mode = "play".to_string();
-            self.current_lidar_points.clear();
         }
         if ctx.input(|i| i.key_pressed(egui::Key::C)) {
             self.mode = "semislow".to_string();
-            self.current_lidar_points.clear();
         }
         if ctx.input(|i| i.key_pressed(egui::Key::X)) {
             self.mode = "slow".to_string();
-            self.current_lidar_points.clear();
         }
         if ctx.input(|i| i.key_pressed(egui::Key::Z)) {
             self.mode = "pause".to_string();
-            self.current_lidar_points.clear();
         }
         if ctx.input(|i| i.key_pressed(egui::Key::E) || i.key_pressed(egui::Key::Space)) {
             if self.mode != "step" {
