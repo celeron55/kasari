@@ -928,6 +928,16 @@ async fn download_task(
                 let mut storage = flash_storage.borrow(cs).borrow_mut();
                 let _ = storage.read(LOG_FLASH_OFFSET + pos, &mut buf);
             });
+            let mut all_ff = true;
+            for b in buf {
+                if b != 0xff {
+                    all_ff = false;
+                    break;
+                }
+            }
+            if all_ff {
+                break;
+            }
             if let Err(e) = socket.write_all(&buf).await {
                 println!("Write error during download: {:?}", e);
                 break;
