@@ -544,7 +544,7 @@ fn motor_update_handler() {
         if !BATTERY_PRESENT.load(Ordering::Relaxed) {
             duty_left = 0;
             duty_right = 0;
-            if update_i % 100 == 0 {
+            if update_i % 1000 == 0 {
                 esp_println::println!(
                     "[{}] Shutting down motor controllers (battery not present)",
                     update_i
