@@ -114,6 +114,8 @@ static mut LIDAR_EVENT_QUEUE_REF: Option<
 static mut SIGNAL_LIDAR_REF: Option<&'static Signal<NoopRawMutex, ()>> = None;
 
 static LIDAR_PACKET_COUNT: AtomicU32 = AtomicU32::new(0);
+static LIDAR_SKIPPED_BYTE_COUNT: AtomicU32 = AtomicU32::new(0);
+static LIDAR_VALID_BYTE_COUNT: AtomicU32 = AtomicU32::new(0);
 
 type LedcTimer = ledc_timer::Timer<'static, esp_hal::ledc::LowSpeed>;
 type LedcChannel = ledc_channel::Channel<'static, esp_hal::ledc::LowSpeed>;
@@ -456,6 +458,7 @@ async fn main(spawner: Spawner) {
     let mut publisher = event_channel.publisher().unwrap();
     let mut subscriber = event_channel.subscriber().unwrap();
     let mut loop_i: u64 = 0;
+    let mut lidar_report_ts: u64 = 0;
 
     loop {
         loop_i += 1;
@@ -511,6 +514,16 @@ async fn main(spawner: Spawner) {
         } else {
             LOGGING_ACTIVE.store(false, Ordering::Relaxed);
         }
+
+        let current_ts = embassy_time::Instant::now().as_ticks();
+        critical_section::with(|cs| {
+            if current_ts > lidar_report_ts + 1_000_000 {
+                let skipped  = LIDAR_SKIPPED_BYTE_COUNT.swap(0, Ordering::Relaxed);
+                let valid  = LIDAR_VALID_BYTE_COUNT.swap(0, Ordering::Relaxed);
+                println!("LIDAR: {} skipped / {} valid bytes", skipped, valid);
+                lidar_report_ts = current_ts;
+            }
+        });
 
         Timer::after_millis(20).await;
     }
@@ -611,16 +624,18 @@ fn uart2_handler() {
                 // Peek at first byte without dequeue
                 if *buf_guard.get(0).unwrap_or(&0) != sensors::HEAD_BYTE {
                     // Skip invalid until head or end
-                    let mut skipped = 0;
                     while let Some(&byte) = buf_guard.get(0) {
                         buf_guard.dequeue();
-                        skipped += 1;
                         if byte == sensors::HEAD_BYTE {
                             break;
                         }
-                    }
-                    if skipped > 0 {
-                        println!("LIDAR: Skipped {} invalid bytes", skipped);
+                        let skipped = LIDAR_SKIPPED_BYTE_COUNT.fetch_add(1, Ordering::Relaxed);
+                        // Report skipped bytes for one packet's length
+                        if skipped < sensors::PACKET_SIZE as u32 {
+                            println!("LISKIP {:02x}", byte);
+                        } else if skipped == sensors::PACKET_SIZE as u32 {
+                            println!("LISKIP {:02x} (hiding futher reports)", byte);
+                        }
                     }
                     continue;
                 }
@@ -628,7 +643,9 @@ fn uart2_handler() {
                 // Extract packet (dequeue 22 bytes)
                 let mut packet = [0u8; sensors::PACKET_SIZE];
                 for i in 0..sensors::PACKET_SIZE {
+                    LIDAR_VALID_BYTE_COUNT.fetch_add(1, Ordering::Relaxed);
                     packet[i] = buf_guard.dequeue().unwrap_or(0);
+                    println!("LIVALI {:02x}", packet[i]);
                 }
 
                 if let Some(parsed) = sensors::parse_packet(&packet) {
