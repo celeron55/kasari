@@ -199,6 +199,9 @@ impl EventSource for FileEventSource {
     }
 
     fn get_next_event(&mut self) -> Option<InputEvent> {
+        if self.next_real_event.is_none() {
+            self.read_next_real();
+        }
         let next_real_ts = self.next_real_event.as_ref().map(get_ts);
         let next_inj_ts = self.next_inject_ts;
 
