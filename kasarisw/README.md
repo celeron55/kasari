@@ -1,13 +1,37 @@
 # Kasarisw: Spinning Robot with LIDAR Navigation
 
 ## Overview
-Spinning robot using repurposed LDS02RR LIDAR (fixed mount, fake encoder for max sampling). Robot spins body (500-2000 RPM), measures rotation via ADXL373 accelerometer, moves by differential motor RPM modulation. Supports autonomous object following/wall avoidance.
+This project features a spinning robot using a repurposed LDS02RR LIDAR (fixed
+mount, fake encoder for max sampling) to enable autonomous navigation and
+object following/wall avoidance. The robot spins its body (500-2000 RPM),
+measures rotation via ADXL373 accelerometer, and achieves directional movement
+through differential motor RPM modulation.
 
 - **Firmware**: ESP32-based, handles sensors, motion planning, WiFi event streaming (binary over TCP).
-- **Simulator**: PC GUI (egui) for log replay or virtual world simulation; visualizes LIDAR points, detections, behavior.
+- **Simulator**: PC GUI (egui) for log replay or virtual world simulation; visualizes LIDAR points, detections, behavior and collisions.
 - **Shared Logic**: LIDAR/accel processing, binning (90 bins, 4° each), object detection (walls/objects via averages/dips).
 - **Python GUI**: `event_monitor.py` for real-time monitoring, logging (JSON), controls over TCP.
 - **Goals**: Compare real vs. simulated behavior; optimize non-standard LIDAR setup.
+
+The robot maintains two rotations: physical (LIDAR orientation, integrated from
+RPM) and virtual (stabilized relative to the world, limited by sensor
+accuracy). In the simulator, the robot is rendered with its virtual rotation
+fixed (pointing +X), keeping the world mostly static but adjusted for
+measurement offsets/errors—useful for analyzing behavior. It produces event
+logs over WiFi (captured via `event_monitor.py`), which can be replayed in the
+simulator to compare real vs. simulated behavior, visualizing LIDAR points,
+detections, and planner outputs.
+
+## Simulator Architecture Notes
+The system uses a MainLogic class shared between the embedded target and the
+simulator for event processing and motion planning. In simulation mode (--sim),
+SimEventSource owns the authoritative MainLogic to generate events (e.g.,
+Lidar, Accelerometer, Planner) and drive physics. In replay mode (log file),
+FileEventSource handles event sourcing (including synthetic injections like
+--inject-autonomous) and uses a ReplayMirror (wrapping MainLogic) to process
+events for consistent visualization. MyApp queries the EventSource trait for
+logic data (e.g., detector, plans) uniformly, avoiding duplication. Flags like
+--reverse-rotation are applied to each source's logic for RPM consistency.
 
 ## Project Structure
 - `src/embedded.rs`: ESP32 firmware entrypoint.
@@ -86,8 +110,3 @@ cargo run-esp  # Alias for cargo run --target xtensa-esp32-none-elf --features e
 - Vbat: [ts, voltage] (V).
 - WifiControl: [ts, mode, r, m, t].
 - Planner: [ts, rotation_speed, movement_x, movement_y, cw_x, cw_y, os_x, os_y, op_x, op_y, theta, rpm].
-
-## Notes
-- LIDAR Quirk: ~11° angle offset; code adjusts 36mm distance.
-- Simulation: Aligns to virtual theta; physics include drag/collisions.
-- Extend: Add features via shared logic; test in sim before firmware.
