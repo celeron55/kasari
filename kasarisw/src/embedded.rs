@@ -518,8 +518,8 @@ async fn main(spawner: Spawner) {
         let current_ts = embassy_time::Instant::now().as_ticks();
         critical_section::with(|cs| {
             if current_ts > lidar_report_ts + 1_000_000 {
-                let skipped  = LIDAR_SKIPPED_BYTE_COUNT.swap(0, Ordering::Relaxed);
-                let valid  = LIDAR_VALID_BYTE_COUNT.swap(0, Ordering::Relaxed);
+                let skipped = LIDAR_SKIPPED_BYTE_COUNT.swap(0, Ordering::Relaxed);
+                let valid = LIDAR_VALID_BYTE_COUNT.swap(0, Ordering::Relaxed);
                 println!("LIDAR: {} skipped / {} valid bytes", skipped, valid);
                 lidar_report_ts = current_ts;
             }
