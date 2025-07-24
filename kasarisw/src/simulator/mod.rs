@@ -62,6 +62,10 @@ struct Args {
     /// Headless mode for profiling
     #[arg(long)]
     headless: bool,
+
+    /// Time at which simulation ends (seconds) (only applies in headless mode)
+    #[arg(long)]
+    end_time: Option<f32>,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -130,6 +134,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                     latest_ts / 1000
                 );
                 last_print = now;
+            }
+
+            if let Some(end_time) = args.end_time {
+                if latest_ts >= (end_time * 1_000_000.0) as u64 {
+                    break;
+                }
             }
         }
 
