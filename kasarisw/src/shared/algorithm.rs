@@ -131,8 +131,7 @@ impl ObjectDetector {
                     self.rpm = self.accel_to_rpm(self.smoothed_accel_y);
                 }
 
-                self.flip_detector.update(raw_accel_z, self.smoothed_accel_y);
-                let accel_z = self.flip_detector.get_corrected_az();
+                self.flip_detector.update(raw_accel_y, raw_accel_z);
 
                 return;
             }
