@@ -426,7 +426,7 @@ impl SimEventSource {
                 let ay = a_g;
                 // Simulate gravity plus noise. Allow calibration to upright
                 // position during first 10 samples
-                let range = Uniform::from(-1.5..1.5);
+                let range = Uniform::from(-10.0..10.0);
                 let az = if self.robot_flipped && self.accelerometer_event_count > 10 {
                     -1.0
                 } else {

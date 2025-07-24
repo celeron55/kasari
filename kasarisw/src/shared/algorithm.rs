@@ -117,9 +117,9 @@ impl ObjectDetector {
         match event {
             Accelerometer(_, ay, az) => {
                 let raw_accel_y = *ay;
-                let raw_accel_z = az.clamp(-4.0, 4.0); // Clip to ±4g
+                let raw_accel_z = az.clamp(-8.0, 8.0); // Clip to ±8g
                 self.smoothed_accel_y = 0.2 * raw_accel_y + 0.8 * self.smoothed_accel_y;
-                self.smoothed_accel_z = 0.05 * raw_accel_z + 0.95 * self.smoothed_accel_z; // Much stronger filtering
+                self.smoothed_accel_z = 0.005 * raw_accel_z + 0.995 * self.smoothed_accel_z; // Much stronger filtering
                 let accel_y = self.smoothed_accel_y;
                 let accel_z = self.smoothed_accel_z;
 
