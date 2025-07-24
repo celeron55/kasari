@@ -95,6 +95,22 @@ pub fn parse_event(line: &str) -> Result<InputEvent, Box<dyn Error>> {
                 rpm,
             ))
         }
+        "Stats" => {
+            if v.len() != 5 {
+                return Err("Invalid Stats event length".into());
+            }
+            let min_dur = v[2].as_u64().ok_or("Invalid min_dur")?;
+            let max_dur = v[3].as_u64().ok_or("Invalid max_dur")?;
+            let avg_dur = v[4].as_u64().ok_or("Invalid avg_dur")?;
+            Ok(InputEvent::Stats(
+                ts,
+                Stats {
+                    step_min_duration_us: min_dur,
+                    step_max_duration_us: max_dur,
+                    step_avg_duration_us: avg_dur,
+                },
+            ))
+        }
         _ => Err("Unknown event type".into()),
     }
 }

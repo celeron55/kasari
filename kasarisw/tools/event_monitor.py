@@ -267,7 +267,8 @@ class SensorGUI:
     def format_stats(self):
         if self.latest_data['Stats'] == "No data yet":
             return "No data yet"
-        return repr(self.latest_data['Stats'])
+        ts, step_min_duration_us, step_max_duration_us, step_avg_duration_us = self.latest_data['Stats']
+        return f"Timestamp: {ts}, Step duration min: {step_min_duration_us}, avg: {step_avg_duration_us}, max: {step_max_duration_us}"
 
     def toggle_control(self):
         self.control_active = not self.control_active
