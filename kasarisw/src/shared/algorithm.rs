@@ -1,8 +1,8 @@
 // algorithm.rs
 #![no_std]
 
+use crate::shared::flip_detector::FlipDetector;
 use crate::shared::rem_euclid_f32;
- use crate::shared::flip_detector::FlipDetector;
 use arrayvec::ArrayVec;
 use core::f32::consts::PI;
 use libm::{atan2f, cosf, fabsf, sinf, sqrtf};

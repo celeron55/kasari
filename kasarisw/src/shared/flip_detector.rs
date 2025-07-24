@@ -110,17 +110,30 @@ impl FlipDetector {
             if self.calib_az_samples.len() >= CALIB_COUNT {
                 // Compute AY variance
                 let ay_mean = self.calib_ay_samples.iter().sum::<f32>() / CALIB_COUNT as f32;
-                let ay_var = self.calib_ay_samples.iter().map(|&ay| (ay - ay_mean).powi(2)).sum::<f32>() / CALIB_COUNT as f32;
-                println!("Calibration attempt: AY var={:0.3}, thresh={:0.3}", ay_var, CALIB_AY_VAR_THRESH);
+                let ay_var = self
+                    .calib_ay_samples
+                    .iter()
+                    .map(|&ay| (ay - ay_mean).powi(2))
+                    .sum::<f32>()
+                    / CALIB_COUNT as f32;
+                println!(
+                    "Calibration attempt: AY var={:0.3}, thresh={:0.3}",
+                    ay_var, CALIB_AY_VAR_THRESH
+                );
                 if ay_var <= CALIB_AY_VAR_THRESH {
                     // Use median for offset
                     let mut sorted_az = self.calib_az_samples.clone();
-                    sorted_az.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(core::cmp::Ordering::Equal));
+                    sorted_az.sort_unstable_by(|a, b| {
+                        a.partial_cmp(b).unwrap_or(core::cmp::Ordering::Equal)
+                    });
                     let median_az = sorted_az[CALIB_COUNT / 2];
                     self.offset = median_az + CALIB_OFFSET_ADD;
                     self.calib_done = true;
                     self.calib_just_done = true;
-                    println!("Calibration done: median_az={:0.3}, offset={:0.3}", median_az, self.offset);
+                    println!(
+                        "Calibration done: median_az={:0.3}, offset={:0.3}",
+                        median_az, self.offset
+                    );
                 } else {
                     // Shift window (remove oldest)
                     self.calib_az_samples.remove(0);
@@ -179,7 +192,8 @@ impl FlipDetector {
                 if self.calib_just_done {
                     self.gravity_score = self.corrected_az;
                 } else {
-                    self.gravity_score = REG_ALPHA * self.corrected_az + (1.0 - REG_ALPHA) * self.gravity_score;
+                    self.gravity_score =
+                        REG_ALPHA * self.corrected_az + (1.0 - REG_ALPHA) * self.gravity_score;
                 }
             }
             self.calib_just_done = false;
@@ -199,11 +213,17 @@ impl FlipDetector {
 
             // Debug print every 100 samples (approximate, using az_buffer.len() as counter)
             if self.az_buffer.len() % 100 == 0 {
-                println!("Sample: raw_az={:0.3}, smoothed_az={:0.3}, corrected_az={:0.3}, flipped={}", raw_az, az_sm, self.corrected_az, self.flipped);
+                println!(
+                    "Sample: raw_az={:0.3}, smoothed_az={:0.3}, corrected_az={:0.3}, flipped={}",
+                    raw_az, az_sm, self.corrected_az, self.flipped
+                );
             }
 
             if self.flipped != self.prev_flipped {
-                println!("State change: flipped={} (corrected_az={:0.3})", self.flipped, self.corrected_az);
+                println!(
+                    "State change: flipped={} (corrected_az={:0.3})",
+                    self.flipped, self.corrected_az
+                );
             }
 
             self.prev_flipped = self.flipped;
