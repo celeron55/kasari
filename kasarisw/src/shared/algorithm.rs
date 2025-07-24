@@ -13,6 +13,23 @@ const MAX_POINTS_PER_UPDATE: usize = 4;
 const CALIBRATION_COUNT: usize = 10;
 const CALIBRATION_MIN_G: f32 = -8.0;
 const CALIBRATION_MAX_G: f32 = 8.0;
+const TABLE_SIZE: usize = 360;
+
+static mut SIN_TABLE: [f32; TABLE_SIZE] = [0.0; TABLE_SIZE];
+static TABLE_INIT: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+fn approx_sin(angle: f32) -> f32 {
+    let norm = rem_euclid_f32(angle, 2.0 * PI) / (2.0 * PI);
+    let f = norm * TABLE_SIZE as f32;
+    let low = f.floor() as usize % TABLE_SIZE;
+    let high = (low + 1) % TABLE_SIZE;
+    let frac = f - f.floor();
+    unsafe { SIN_TABLE[low] * (1.0 - frac) + SIN_TABLE[high] * frac }
+}
+
+fn approx_cos(angle: f32) -> f32 {
+    approx_sin(angle + PI / 2.0)
+}
 
 pub struct DetectionResult {
     pub closest_wall: (f32, f32),
@@ -212,8 +229,8 @@ impl ObjectDetector {
                         2.0 * PI,
                     );
                     let bin_idx = ((angle / BIN_ANGLE_STEP) as usize) % NUM_BINS;
-                    let x = d * cosf(angle);
-                    let y = d * sinf(angle);
+                    let x = d * approx_cos(angle);
+                    let y = d * approx_sin(angle);
                     self.last_xys.push((x, y));
                     if let Some(prev_idx) = self.last_bin_idx {
                         let mut delta: i32 =
@@ -261,9 +278,12 @@ impl ObjectDetector {
     }
 
     fn interp_dist(&self, phi: f32, delta: f32) -> f32 {
-        let f = rem_euclid_f32((phi - delta) / BIN_ANGLE_STEP, NUM_BINS as f32);
-        let low = f.floor() as usize % NUM_BINS;
-        let high = (low + 1) % NUM_BINS;
+        let mut f = (phi - delta) / BIN_ANGLE_STEP;
+        if f < 0.0 {
+            f += NUM_BINS as f32;
+        }
+        let low = f.floor() as usize;
+        let high = if low + 1 == NUM_BINS { 0 } else { low + 1 };
         let frac = f - f.floor();
         let d_low = self.bins_dist[low];
         let d_high = self.bins_dist[high];
@@ -415,7 +435,6 @@ impl ObjectDetector {
             }
         }
 
-        // Fallback
         let mut max_protrusion = f32::NEG_INFINITY;
         let mut best_fallback_idx = 0;
         if best_score == f32::NEG_INFINITY {
@@ -465,6 +484,15 @@ impl ObjectDetector {
                 }
             }
             INIT.store(true, core::sync::atomic::Ordering::SeqCst);
+        }
+        if !TABLE_INIT.load(core::sync::atomic::Ordering::SeqCst) {
+            for i in 0..TABLE_SIZE {
+                let angle = i as f32 * 2.0 * PI / TABLE_SIZE as f32;
+                unsafe {
+                    SIN_TABLE[i] = sinf(angle);
+                }
+            }
+            TABLE_INIT.store(true, core::sync::atomic::Ordering::SeqCst);
         }
 
         // Compute closest_wall and object_pos as before
@@ -565,7 +593,7 @@ impl ObjectDetector {
             let mut best_temp_w = 0.0;
             let mut best_temp_h = 0.0;
 
-            for k in 0..NUM_BINS {
+            for k in (0..NUM_BINS).step_by(2) {
                 let delta = k as f32 * BIN_ANGLE_STEP;
                 let d_right = self.interp_dist(0.0, delta);
                 let d_left = self.interp_dist(PI, delta);
@@ -586,71 +614,61 @@ impl ObjectDetector {
                 let temp_h = d_bottom + d_top;
 
                 let mut error = 0.0;
-                let num_samples = 8;
                 let mut valid_samples = 0;
-                for j in 0..num_samples {
-                    let phi = j as f32 * (2.0 * PI / num_samples as f32);
-                    let observed = self.interp_dist(phi, delta);
-                    if !observed.is_finite() {
-                        error += 1000.0;
-                        continue;
-                    }
-                    let dx = cosf(phi);
-                    let dy = sinf(phi);
-                    let mut min_t = f32::INFINITY;
 
-                    // Left wall (x=0)
-                    if dx.abs() > 1e-6 {
-                        let t = (0.0 - temp_x) / dx;
-                        if t > 0.0 {
-                            let hit_y = temp_y + t * dy;
-                            if hit_y >= 0.0 && hit_y <= temp_h {
-                                min_t = min_t.min(t);
-                            }
-                        }
+                // phi=0.0 (right)
+                let observed = d_right;
+                if !observed.is_finite() {
+                    error += 1000.0;
+                } else {
+                    let min_t = temp_w - temp_x;
+                    let diff = observed - min_t;
+                    if diff > 20.0 {
+                        error += (diff - 20.0).powi(2);
                     }
-                    // Right wall (x=temp_w)
-                    if dx.abs() > 1e-6 {
-                        let t = (temp_w - temp_x) / dx;
-                        if t > 0.0 {
-                            let hit_y = temp_y + t * dy;
-                            if hit_y >= 0.0 && hit_y <= temp_h {
-                                min_t = min_t.min(t);
-                            }
-                        }
-                    }
-                    // Bottom wall (y=0)
-                    if dy.abs() > 1e-6 {
-                        let t = (0.0 - temp_y) / dy;
-                        if t > 0.0 {
-                            let hit_x = temp_x + t * dx;
-                            if hit_x >= 0.0 && hit_x <= temp_w {
-                                min_t = min_t.min(t);
-                            }
-                        }
-                    }
-                    // Top wall (y=temp_h)
-                    if dy.abs() > 1e-6 {
-                        let t = (temp_h - temp_y) / dy;
-                        if t > 0.0 {
-                            let hit_x = temp_x + t * dx;
-                            if hit_x >= 0.0 && hit_x <= temp_w {
-                                min_t = min_t.min(t);
-                            }
-                        }
-                    }
-                    if min_t.is_infinite() {
-                        error += 1000.0;
-                    } else {
-                        let diff = observed - min_t;
-                        if diff > 20.0 {
-                            error += (diff - 20.0).powi(2);
-                        }
-                        valid_samples += 1;
-                    }
+                    valid_samples += 1;
                 }
 
-                if valid_samples >= 6 && error < best_error {
+                // phi=PI/2 (top)
+                let observed = d_top;
+                if !observed.is_finite() {
+                    error += 1000.0;
+                } else {
+                    let min_t = temp_h - temp_y;
+                    let diff = observed - min_t;
+                    if diff > 20.0 {
+                        error += (diff - 20.0).powi(2);
+                    }
+                    valid_samples += 1;
+                }
+
+                // phi=PI (left)
+                let observed = d_left;
+                if !observed.is_finite() {
+                    error += 1000.0;
+                } else {
+                    let min_t = temp_x;
+                    let diff = observed - min_t;
+                    if diff > 20.0 {
+                        error += (diff - 20.0).powi(2);
+                    }
+                    valid_samples += 1;
+                }
+
+                // phi=3*PI/2 (bottom)
+                let observed = d_bottom;
+                if !observed.is_finite() {
+                    error += 1000.0;
+                } else {
+                    let min_t = temp_y;
+                    let diff = observed - min_t;
+                    if diff > 20.0 {
+                        error += (diff - 20.0).powi(2);
+                    }
+                    valid_samples += 1;
+                }
+
+                if valid_samples >= 3 && error < best_error {
                     best_error = error;
                     best_k = k;
                     best_d_left = d_left;
@@ -661,6 +679,95 @@ impl ObjectDetector {
                     best_temp_y = temp_y;
                     best_temp_w = temp_w;
                     best_temp_h = temp_h;
+                }
+            }
+
+            // Refine best_k by checking neighbors
+            if best_error < f32::INFINITY {
+                for dk in [-1i32, 1] {
+                    let k_ref = ((best_k as i32 + dk).rem_euclid(NUM_BINS as i32)) as usize;
+                    let delta = k_ref as f32 * BIN_ANGLE_STEP;
+                    let d_right = self.interp_dist(0.0, delta);
+                    let d_left = self.interp_dist(PI, delta);
+                    let d_top = self.interp_dist(PI / 2.0, delta);
+                    let d_bottom = self.interp_dist(3.0 * PI / 2.0, delta);
+
+                    if d_left.is_infinite()
+                        || d_right.is_infinite()
+                        || d_bottom.is_infinite()
+                        || d_top.is_infinite()
+                    {
+                        continue;
+                    }
+
+                    let temp_x = d_left;
+                    let temp_y = d_bottom;
+                    let temp_w = d_left + d_right;
+                    let temp_h = d_bottom + d_top;
+
+                    let mut error = 0.0;
+                    let mut valid_samples = 0;
+
+                    let observed = d_right;
+                    if !observed.is_finite() {
+                        error += 1000.0;
+                    } else {
+                        let min_t = temp_w - temp_x;
+                        let diff = observed - min_t;
+                        if diff > 20.0 {
+                            error += (diff - 20.0).powi(2);
+                        }
+                        valid_samples += 1;
+                    }
+
+                    let observed = d_top;
+                    if !observed.is_finite() {
+                        error += 1000.0;
+                    } else {
+                        let min_t = temp_h - temp_y;
+                        let diff = observed - min_t;
+                        if diff > 20.0 {
+                            error += (diff - 20.0).powi(2);
+                        }
+                        valid_samples += 1;
+                    }
+
+                    let observed = d_left;
+                    if !observed.is_finite() {
+                        error += 1000.0;
+                    } else {
+                        let min_t = temp_x;
+                        let diff = observed - min_t;
+                        if diff > 20.0 {
+                            error += (diff - 20.0).powi(2);
+                        }
+                        valid_samples += 1;
+                    }
+
+                    let observed = d_bottom;
+                    if !observed.is_finite() {
+                        error += 1000.0;
+                    } else {
+                        let min_t = temp_y;
+                        let diff = observed - min_t;
+                        if diff > 20.0 {
+                            error += (diff - 20.0).powi(2);
+                        }
+                        valid_samples += 1;
+                    }
+
+                    if valid_samples >= 3 && error < best_error {
+                        best_error = error;
+                        best_k = k_ref;
+                        best_d_left = d_left;
+                        best_d_right = d_right;
+                        best_d_bottom = d_bottom;
+                        best_d_top = d_top;
+                        best_temp_x = temp_x;
+                        best_temp_y = temp_y;
+                        best_temp_w = temp_w;
+                        best_temp_h = temp_h;
+                    }
                 }
             }
 
