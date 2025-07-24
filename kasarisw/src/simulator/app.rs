@@ -23,6 +23,7 @@ pub struct MyApp {
     debug: bool,
     latest_planner: Option<InputEvent>,
     latest_stats: Option<InputEvent>,
+    latest_vbat: f32,
     show_planner_theta: bool,
     theta_offset: f32,
 }
@@ -72,6 +73,7 @@ impl MyApp {
             debug,
             latest_planner: None,
             latest_stats: None,
+            latest_vbat: 0.0,
             show_planner_theta: false,
             theta_offset: 0.0,
         }
@@ -96,6 +98,9 @@ impl MyApp {
         }
         if let InputEvent::Stats(ts, stats) = event {
             self.latest_stats = Some(event.clone());
+        }
+        if let InputEvent::Vbat(ts, voltage) = event {
+            self.latest_vbat = *voltage;
         }
         if matches!(event, InputEvent::Lidar(..)) {
             self.current_lidar_points = self
@@ -381,6 +386,25 @@ impl eframe::App for MyApp {
                                 egui::RichText::new(format!("{:>8.2}", target_rpm))
                                     .text_style(large_text.clone())
                                     .color(egui::Color32::from_gray(220)),
+                            );
+                        });
+                        ui.end_row();
+
+                        ui.label(
+                            egui::RichText::new("Battery:")
+                                .text_style(large_text.clone())
+                                .color(egui::Color32::from_gray(220)),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let color = if self.latest_vbat < 10.3 {
+                                egui::Color32::RED
+                            } else {
+                                egui::Color32::from_gray(220)
+                            };
+                            ui.label(
+                                egui::RichText::new(format!("{:>8.2} V", self.latest_vbat))
+                                    .text_style(large_text.clone())
+                                    .color(color),
                             );
                         });
                         ui.end_row();
