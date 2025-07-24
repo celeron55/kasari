@@ -23,6 +23,7 @@ EVENT_TAGS = {
     'Vbat': 3,
     'WifiControl': 4,  # Assuming this tag for WifiControl
     'Planner': 5,
+    'Stats': 6,
 }
 
 # GUI class
@@ -30,7 +31,7 @@ class SensorGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("Sensor Data Monitor")
-        self.root.geometry("1100x800")
+        self.root.geometry("1100x900")
         
         # Make the root grid expandable
         self.root.rowconfigure(0, weight=1)
@@ -118,28 +119,33 @@ class SensorGUI:
         self.planner_label = ttk.Label(self.frame, text=self.format_planner())
         self.planner_label.grid(row=11, column=0, columnspan=3, sticky=tk.W)
         
+        # Stats section
+        ttk.Label(self.frame, text="Stats:").grid(row=12, column=0, sticky=tk.W)
+        self.stats_label = ttk.Label(self.frame, text=self.format_stats())
+        self.stats_label.grid(row=13, column=0, columnspan=3, sticky=tk.W)
+        
         # Large toggle button for control
         style = ttk.Style()
         style.configure('Large.TButton', font=('Helvetica', 20), padding=10)
         self.control_button = ttk.Button(self.frame, text="Control Target: OFF", command=self.toggle_control, style='Large.TButton')
-        self.control_button.grid(row=12, column=0, columnspan=3, sticky=tk.NSEW, pady=10)
+        self.control_button.grid(row=14, column=0, columnspan=3, sticky=tk.NSEW, pady=10)
         
         # Autonomous mode button
         self.autonomous_button = ttk.Button(self.frame, text="Autonomous Mode: OFF", command=self.toggle_autonomous, style='Large.TButton')
-        self.autonomous_button.grid(row=13, column=0, columnspan=3, sticky=tk.NSEW, pady=10)
+        self.autonomous_button.grid(row=15, column=0, columnspan=3, sticky=tk.NSEW, pady=10)
         
         # Sliders for r, m, t
-        ttk.Label(self.frame, text="Rotation:").grid(row=14, column=0, sticky=tk.W)
+        ttk.Label(self.frame, text="Rotation:").grid(row=16, column=0, sticky=tk.W)
         self.r_scale = ttk.Scale(self.frame, from_=-2000.0, to=2000.0, orient='horizontal', variable=self.r_var)
-        self.r_scale.grid(row=14, column=1, columnspan=2, sticky=tk.EW)
+        self.r_scale.grid(row=16, column=1, columnspan=2, sticky=tk.EW)
         
-        ttk.Label(self.frame, text="Movement:").grid(row=15, column=0, sticky=tk.W)
+        ttk.Label(self.frame, text="Movement:").grid(row=17, column=0, sticky=tk.W)
         self.m_scale = ttk.Scale(self.frame, from_=-100.0, to=100.0, orient='horizontal', variable=self.m_var)
-        self.m_scale.grid(row=15, column=1, columnspan=2, sticky=tk.EW)
+        self.m_scale.grid(row=17, column=1, columnspan=2, sticky=tk.EW)
         
-        ttk.Label(self.frame, text="Turning:").grid(row=16, column=0, sticky=tk.W)
+        ttk.Label(self.frame, text="Turning:").grid(row=18, column=0, sticky=tk.W)
         self.t_scale = ttk.Scale(self.frame, from_=-100.0, to=100.0, orient='horizontal', variable=self.t_var)
-        self.t_scale.grid(row=16, column=1, columnspan=2, sticky=tk.EW)
+        self.t_scale.grid(row=18, column=1, columnspan=2, sticky=tk.EW)
         
         # Initially disable sliders
         self.set_sliders_state('disabled')
@@ -154,6 +160,7 @@ class SensorGUI:
             self.receiver_label.config(wraplength=width)
             self.vbat_label.config(wraplength=width)
             self.planner_label.config(wraplength=width)
+            self.stats_label.config(wraplength=width)
 
     def toggle_connect(self):
         if self.connect_button.cget("text") == "Connect":
@@ -257,6 +264,11 @@ class SensorGUI:
                 f"Object: ({op_x:.2f}, {op_y:.2f}), Theta: {theta:.2f}, "
                 f"RPM measurement: {rpm:.2f}")
 
+    def format_stats(self):
+        if self.latest_data['Stats'] == "No data yet":
+            return "No data yet"
+        return repr(self.latest_data['Stats'])
+
     def toggle_control(self):
         self.control_active = not self.control_active
         if self.control_active:
@@ -309,6 +321,8 @@ class SensorGUI:
                 self.latest_data['Vbat'] = event[1:]
             elif sensor_type == 'Planner':
                 self.latest_data['Planner'] = event[1:]
+            elif sensor_type == 'Stats':
+                self.latest_data['Stats'] = event[1:]
         
         # Process status updates
         while not status_queue.empty():
@@ -321,6 +335,7 @@ class SensorGUI:
         self.receiver_label.config(text=self.format_receiver())
         self.vbat_label.config(text=self.format_vbat())
         self.planner_label.config(text=self.format_planner())
+        self.stats_label.config(text=self.format_stats())
         
         # Send WifiControl event if connected
         if self.sock:

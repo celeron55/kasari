@@ -147,6 +147,7 @@ impl FileEventSource {
                                             rpm,
                                         )
                                     }
+                                    InputEvent::Stats(ts, stats) => InputEvent::Stats(ts, stats),
                                 };
                                 self.last_read_ts = Some(adjusted_ts);
                                 if !self.first_lidar_found

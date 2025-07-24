@@ -55,6 +55,12 @@ def parse_event(buffer):
             return None, buffer
         timestamp, rotation_speed, movement_x, movement_y, cw_x, cw_y, os_x, os_y, op_x, op_y, theta, rpm = struct.unpack('<Qfffffffffff', buffer[2:54])
         return ('Planner', timestamp, rotation_speed, movement_x, movement_y, cw_x, cw_y, os_x, os_y, op_x, op_y, theta, rpm), buffer[54:]
+
+    elif tag == 6:  # Stats: 2 + 8 + 8 + 8 + 8 = 34 bytes
+        if len(buffer) < 34:
+            return None, buffer
+        timestamp, min_dur, max_dur, avg_dur = struct.unpack('<QQQQ', buffer[2:34])
+        return ('Stats', timestamp, min_dur, max_dur, avg_dur), buffer[34:]
     
     else:
         # Invalid tag: skip 1 byte to slide/resync

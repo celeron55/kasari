@@ -107,5 +107,6 @@ pub fn get_ts(event: &InputEvent) -> u64 {
         InputEvent::Vbat(ts, ..) => *ts,
         InputEvent::WifiControl(ts, ..) => *ts,
         InputEvent::Planner(ts, ..) => *ts,
+        InputEvent::Stats(ts, stats) => *ts,
     }
 }

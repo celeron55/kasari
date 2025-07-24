@@ -24,6 +24,8 @@ pub const MIN_ATTACK_RPM: f32 = 800.0;
 pub const MAX_RPM_RAMP_RATE: f32 = 2000.0; // rpm/s
 pub const RPM_INITIAL_JUMP: f32 = 500.0; // rpm
 
+pub const RECEIVER_MAX_GAP_US: u64 = 1_000_000;
+
 pub const LOG_LIDAR: bool = false;
 pub const LOG_ALL_LIDAR: bool = false;
 pub const LOG_RECEIVER: bool = false;
@@ -68,7 +70,8 @@ pub mod kasari {
     use crate::shared::ObjectDetector;
     use crate::shared::{
         get_current_timestamp, LOG_DETECTION, LOG_RECEIVER, LOG_VBAT, LOG_WIFI_CONTROL,
-        MAX_RPM_RAMP_RATE, MIN_ATTACK_RPM, MIN_MOVE_RPM, RPM_INITIAL_JUMP, TARGET_RPM,
+        MAX_RPM_RAMP_RATE, MIN_ATTACK_RPM, MIN_MOVE_RPM, RECEIVER_MAX_GAP_US, RPM_INITIAL_JUMP,
+        TARGET_RPM,
     };
     #[cfg(target_os = "none")]
     use alloc::vec::Vec;
@@ -95,6 +98,14 @@ pub mod kasari {
             f32,
             f32,
         ), // timestamp, MCP, latest_closest_wall, latest_open_space, latest_object_pos, measured_rpm
+        Stats(u64, Stats), // timestamp, statistics struct
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    pub struct Stats {
+        pub step_min_duration_us: u64,
+        pub step_max_duration_us: u64,
+        pub step_avg_duration_us: u64,
     }
 
     #[derive(Clone, Copy, Debug)]
@@ -186,6 +197,11 @@ pub mod kasari {
         target: ControlTargets,
         pub reverse_rotation: bool,
         reverse_rotation_ts: u64,
+        last_valid_receiver_ts: Option<u64>,
+        stats_step_count: u64,
+        stats_step_sum_us: u64,
+        stats_step_min_us: u64,
+        stats_step_max_us: u64,
     }
 
     impl MainLogic {
@@ -211,6 +227,11 @@ pub mod kasari {
                 target: ControlTargets::default(),
                 reverse_rotation,
                 reverse_rotation_ts: 0,
+                last_valid_receiver_ts: None,
+                stats_step_count: 0,
+                stats_step_sum_us: 0,
+                stats_step_min_us: 0,
+                stats_step_max_us: 0,
             }
         }
 
@@ -266,14 +287,26 @@ pub mod kasari {
                                 );
                             }
                             self.autonomous_enabled = stick_percent >= 5.0;
+                            self.last_valid_receiver_ts = Some(_timestamp);
                             if !self.autonomous_enabled {
                                 self.reset_targets();
                             }
                         }
                         None => {
-                            self.autonomous_enabled = false;
-                            self.reset_targets();
-                            self.motor_control_plan = None;
+                            if let Some(last_ts) = self.last_valid_receiver_ts {
+                                if _timestamp - last_ts > RECEIVER_MAX_GAP_US {
+                                    self.autonomous_enabled = false;
+                                    self.reset_targets();
+                                    self.motor_control_plan = None;
+                                } else {
+                                    // Ignore transient null and retain previous
+                                    // autonomous_enabled state
+                                }
+                            } else {
+                                self.autonomous_enabled = false;
+                                self.reset_targets();
+                                self.motor_control_plan = None;
+                            }
                         }
                     }
                 }
@@ -320,6 +353,7 @@ pub mod kasari {
                     self.control_turning_speed = t;
                     self.update_targets();
                 }
+                InputEvent::Stats(_ts, _stats) => {}
             }
         }
 
@@ -514,6 +548,8 @@ pub mod kasari {
             >,
             debug: bool,
         ) {
+            let step_start = get_current_timestamp();
+
             if (timestamp as i64 - self.last_planner_ts as i64) >= 100_000 {
                 self.last_planner_ts = timestamp;
 
@@ -546,7 +582,7 @@ pub mod kasari {
                     movement_x: self.target.movement_x,
                     movement_y: self.target.movement_y,
                 };
-                if let Some(publisher) = publisher {
+                if let Some(ref publisher) = publisher {
                     publisher.publish_immediate(InputEvent::Planner(
                         timestamp,
                         plan,
@@ -571,6 +607,34 @@ pub mod kasari {
                     movement_y: self.target.movement_y,
                 };
                 self.motor_control_plan = Some(plan);
+            }
+
+            let step_duration_us = get_current_timestamp() - step_start;
+            self.stats_step_sum_us += step_duration_us;
+            self.stats_step_min_us = self.stats_step_min_us.min(step_duration_us);
+            self.stats_step_max_us = self.stats_step_max_us.max(step_duration_us);
+
+            self.stats_step_count += 1;
+
+            if self.stats_step_count >= 50 {
+                // ~1 second at 20ms loop
+                if let Some(publisher) = publisher {
+                    let avg_step_us = self.stats_step_sum_us / self.stats_step_count;
+
+                    publisher.publish_immediate(InputEvent::Stats(
+                        timestamp,
+                        Stats {
+                            step_min_duration_us: self.stats_step_min_us,
+                            step_max_duration_us: self.stats_step_max_us,
+                            step_avg_duration_us: avg_step_us,
+                        },
+                    ));
+                }
+                // Reset stats
+                self.stats_step_count = 0;
+                self.stats_step_sum_us = 0;
+                self.stats_step_min_us = u64::MAX;
+                self.stats_step_max_us = 0;
             }
         }
     }
@@ -641,6 +705,14 @@ pub mod kasari {
                 buf.extend_from_slice(&op.1.to_le_bytes());
                 buf.extend_from_slice(&theta.to_le_bytes());
                 buf.extend_from_slice(&rpm.to_le_bytes());
+            }
+            InputEvent::Stats(ts, stats) => {
+                let tag = (6u16 ^ TAG_XOR).to_le_bytes();
+                buf.extend_from_slice(&tag);
+                buf.extend_from_slice(&ts.to_le_bytes());
+                buf.extend_from_slice(&stats.step_min_duration_us.to_le_bytes());
+                buf.extend_from_slice(&stats.step_max_duration_us.to_le_bytes());
+                buf.extend_from_slice(&stats.step_avg_duration_us.to_le_bytes());
             }
         }
         buf
