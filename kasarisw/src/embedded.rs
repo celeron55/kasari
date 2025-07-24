@@ -960,6 +960,12 @@ async fn download_task(
             }
         }
 
+        println!("Download complete. Clearing storage...");
+
+        socket.close();
+        Timer::after(Duration::from_millis(1000)).await;
+        socket.abort();
+
         // Clear the storage
         for i in 0..(LOG_FLASH_SIZE / BATCH_FLUSH_SIZE as u32) {
             let pos = i * BATCH_FLUSH_SIZE as u32;
@@ -974,11 +980,7 @@ async fn download_task(
         LOG_WRITE_POS.store(0, Ordering::Relaxed);
         LOG_SEQ.store(0, Ordering::Relaxed);
 
-        println!("Download complete and storage cleared.");
-
-        socket.close();
-        Timer::after(Duration::from_millis(1000)).await;
-        socket.abort();
+        println!("Storage cleared.");
     }
 }
 
