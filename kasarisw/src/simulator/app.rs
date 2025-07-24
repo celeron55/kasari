@@ -22,6 +22,7 @@ pub struct MyApp {
     current_lidar_points: Vec<(f32, f32)>,
     debug: bool,
     latest_planner: Option<InputEvent>,
+    latest_stats: Option<InputEvent>,
     show_planner_theta: bool,
     theta_offset: f32,
 }
@@ -70,6 +71,7 @@ impl MyApp {
             current_lidar_points: Vec::new(),
             debug,
             latest_planner: None,
+            latest_stats: None,
             show_planner_theta: false,
             theta_offset: 0.0,
         }
@@ -91,6 +93,9 @@ impl MyApp {
             if self.debug {
                 println!("Processed Planner ts={} plan={:?} theta={:.4} (sim: {:.4}) rpm={:.2} (sim: {:.4})", ts, plan, *theta, self.event_source.get_logic().unwrap().detector.theta, rpm, self.event_source.get_logic().unwrap().detector.rpm);
             }
+        }
+        if let InputEvent::Stats(ts, stats) = event {
+            self.latest_stats = Some(event.clone());
         }
         if matches!(event, InputEvent::Lidar(..)) {
             self.current_lidar_points = self
@@ -226,13 +231,35 @@ impl eframe::App for MyApp {
                 0.0
             }
         });
+        // Stats from event log
+        let step_min_duration_us = self.latest_stats.as_ref().map_or(0, |p| {
+            if let InputEvent::Stats(ts, stats) = p {
+                stats.step_min_duration_us
+            } else {
+                0
+            }
+        });
+        let step_avg_duration_us = self.latest_stats.as_ref().map_or(0, |p| {
+            if let InputEvent::Stats(ts, stats) = p {
+                stats.step_avg_duration_us
+            } else {
+                0
+            }
+        });
+        let step_max_duration_us = self.latest_stats.as_ref().map_or(0, |p| {
+            if let InputEvent::Stats(ts, stats) = p {
+                stats.step_max_duration_us
+            } else {
+                0
+            }
+        });
 
         let robot_opt = self.event_source.get_robot();
         let world_opt = self.event_source.get_world();
 
         egui::CentralPanel::default().show(ctx, |ui| {
             let heading_text = format!(
-                "Real-Time Robot LiDAR Simulation\nEvents: {}, TS: {} ms, Simulator RPM: {:.2}, Measured RPM: {:.2}, Target RPM: {:.2}, flipped: {} (simulated) {} (measured)",
+                "Real-Time Robot LiDAR Simulation\nEvents: {}, TS: {} ms, Simulator RPM: {:.2}, Measured RPM: {:.2}, Target RPM: {:.2}, flipped: {} (simulated) {} (measured), Step duration min: {}, avg: {}, max: {}",
                 self.current_event_idx,
                 self.event_source.get_logic().unwrap().detector.last_ts.unwrap_or(0) / 1000,
                 self.event_source.get_logic().unwrap().detector.rpm,
@@ -240,6 +267,9 @@ impl eframe::App for MyApp {
                 target_rpm,
                 self.event_source.get_robot_flipped(),
                 self.event_source.get_logic().unwrap().detector.flipped,
+                step_min_duration_us,
+                step_avg_duration_us,
+                step_max_duration_us,
             );
             ui.heading(heading_text);
 

@@ -1,5 +1,6 @@
 use kasarisw::shared::kasari::InputEvent;
 use kasarisw::shared::kasari::MotorControlPlan;
+use kasarisw::shared::kasari::Stats;
 use serde_json::Value;
 use std::error::Error;
 
