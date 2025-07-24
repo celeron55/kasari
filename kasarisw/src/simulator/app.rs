@@ -303,16 +303,25 @@ impl eframe::App for MyApp {
                     .spacing([10.0, 5.0])
                     .striped(true)
                     .show(ui, |ui| {
-                        ui.label(egui::RichText::new("Events:").text_style(large_text.clone()).color(egui::Color32::from_gray(220)));
+                        ui.label(
+                            egui::RichText::new("Events:")
+                                .text_style(large_text.clone())
+                                .color(egui::Color32::from_gray(220)),
+                        );
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.label(
                                 egui::RichText::new(format!("{:>8}", self.current_event_idx))
-                                    .text_style(large_text.clone()).color(egui::Color32::from_gray(220)),
+                                    .text_style(large_text.clone())
+                                    .color(egui::Color32::from_gray(220)),
                             );
                         });
                         ui.end_row();
 
-                        ui.label(egui::RichText::new("Timestamp:").text_style(large_text.clone()).color(egui::Color32::from_gray(220)));
+                        ui.label(
+                            egui::RichText::new("Timestamp:")
+                                .text_style(large_text.clone())
+                                .color(egui::Color32::from_gray(220)),
+                        );
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.label(
                                 egui::RichText::new(format!(
@@ -325,13 +334,16 @@ impl eframe::App for MyApp {
                                         .unwrap_or(0)
                                         / 1000
                                 ))
-                                .text_style(large_text.clone()).color(egui::Color32::from_gray(220)),
+                                .text_style(large_text.clone())
+                                .color(egui::Color32::from_gray(220)),
                             );
                         });
                         ui.end_row();
 
                         ui.label(
-                            egui::RichText::new("Simulator RPM:").text_style(large_text.clone()).color(egui::Color32::from_gray(220)),
+                            egui::RichText::new("Simulator RPM:")
+                                .text_style(large_text.clone())
+                                .color(egui::Color32::from_gray(220)),
                         );
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.label(
@@ -339,33 +351,44 @@ impl eframe::App for MyApp {
                                     "{:>8.2}",
                                     self.event_source.get_logic().unwrap().detector.rpm
                                 ))
-                                .text_style(large_text.clone()).color(egui::Color32::from_gray(220)),
+                                .text_style(large_text.clone())
+                                .color(egui::Color32::from_gray(220)),
                             );
                         });
                         ui.end_row();
 
                         ui.label(
-                            egui::RichText::new("Measured RPM:").text_style(large_text.clone()).color(egui::Color32::from_gray(220)),
+                            egui::RichText::new("Measured RPM:")
+                                .text_style(large_text.clone())
+                                .color(egui::Color32::from_gray(220)),
                         );
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.label(
                                 egui::RichText::new(format!("{:>8.2}", measured_rpm))
-                                    .text_style(large_text.clone()).color(egui::Color32::from_gray(220)),
-                            );
-                        });
-                        ui.end_row();
-
-                        ui.label(egui::RichText::new("Target RPM:").text_style(large_text.clone()).color(egui::Color32::from_gray(220)));
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(
-                                egui::RichText::new(format!("{:>8.2}", target_rpm))
-                                    .text_style(large_text.clone()).color(egui::Color32::from_gray(220)),
+                                    .text_style(large_text.clone())
+                                    .color(egui::Color32::from_gray(220)),
                             );
                         });
                         ui.end_row();
 
                         ui.label(
-                            egui::RichText::new("Flipped (simulated):").text_style(large_text.clone()).color(egui::Color32::from_gray(220)),
+                            egui::RichText::new("Target RPM:")
+                                .text_style(large_text.clone())
+                                .color(egui::Color32::from_gray(220)),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(
+                                egui::RichText::new(format!("{:>8.2}", target_rpm))
+                                    .text_style(large_text.clone())
+                                    .color(egui::Color32::from_gray(220)),
+                            );
+                        });
+                        ui.end_row();
+
+                        ui.label(
+                            egui::RichText::new("Flipped (simulated):")
+                                .text_style(large_text.clone())
+                                .color(egui::Color32::from_gray(220)),
                         );
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.label(
@@ -373,13 +396,16 @@ impl eframe::App for MyApp {
                                     "{:>8}",
                                     self.event_source.get_robot_flipped()
                                 ))
-                                .text_style(large_text.clone()).color(egui::Color32::from_gray(220)),
+                                .text_style(large_text.clone())
+                                .color(egui::Color32::from_gray(220)),
                             );
                         });
                         ui.end_row();
 
                         ui.label(
-                            egui::RichText::new("Flipped (measured):").text_style(large_text.clone()).color(egui::Color32::from_gray(220)),
+                            egui::RichText::new("Flipped (measured):")
+                                .text_style(large_text.clone())
+                                .color(egui::Color32::from_gray(220)),
                         );
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.label(
@@ -387,34 +413,50 @@ impl eframe::App for MyApp {
                                     "{:>8}",
                                     self.event_source.get_logic().unwrap().detector.flipped
                                 ))
-                                .text_style(large_text.clone()).color(egui::Color32::from_gray(220)),
+                                .text_style(large_text.clone())
+                                .color(egui::Color32::from_gray(220)),
                             );
                         });
                         ui.end_row();
 
-                        ui.label(egui::RichText::new("MainLogic step() min:").text_style(large_text.clone()).color(egui::Color32::from_gray(220)));
+                        ui.label(
+                            egui::RichText::new("MainLogic step() min:")
+                                .text_style(large_text.clone())
+                                .color(egui::Color32::from_gray(220)),
+                        );
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.label(
                                 egui::RichText::new(format!("{:>8} us", step_min_duration_us))
-                                    .text_style(large_text.clone()).color(egui::Color32::from_gray(220)),
+                                    .text_style(large_text.clone())
+                                    .color(egui::Color32::from_gray(220)),
                             );
                         });
                         ui.end_row();
 
-                        ui.label(egui::RichText::new("MainLogic step() avg:").text_style(large_text.clone()).color(egui::Color32::from_gray(220)));
+                        ui.label(
+                            egui::RichText::new("MainLogic step() avg:")
+                                .text_style(large_text.clone())
+                                .color(egui::Color32::from_gray(220)),
+                        );
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.label(
                                 egui::RichText::new(format!("{:>8} us", step_avg_duration_us))
-                                    .text_style(large_text.clone()).color(egui::Color32::from_gray(220)),
+                                    .text_style(large_text.clone())
+                                    .color(egui::Color32::from_gray(220)),
                             );
                         });
                         ui.end_row();
 
-                        ui.label(egui::RichText::new("MainLogic step() max:").text_style(large_text.clone()).color(egui::Color32::from_gray(220)));
+                        ui.label(
+                            egui::RichText::new("MainLogic step() max:")
+                                .text_style(large_text.clone())
+                                .color(egui::Color32::from_gray(220)),
+                        );
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.label(
                                 egui::RichText::new(format!("{:>8} us", step_max_duration_us))
-                                    .text_style(large_text.clone()).color(egui::Color32::from_gray(220)),
+                                    .text_style(large_text.clone())
+                                    .color(egui::Color32::from_gray(220)),
                             );
                         });
                         ui.end_row();
