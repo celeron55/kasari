@@ -144,10 +144,10 @@ impl ObjectDetector {
                     }
                     if self.calibration_z_samples.len() >= CALIBRATION_COUNT {
                         // Calibrate Z by assuming the value we should be seeing
-                        // is 1.0 G, which would mean the robot is upright
+                        // is -1.0 G, which would mean the robot is upright
                         self.accel_z_offset = self.calibration_z_samples.iter().sum::<f32>()
                             / self.calibration_z_samples.len() as f32
-                            - 1.0;
+                            + 1.0;
                         self.calibration_z_done = true;
                     }
                 }
@@ -155,13 +155,13 @@ impl ObjectDetector {
                 // Determine whether robot is flipped or not
                 if self.calibration_z_done {
                     let corrected_z = accel_z - self.accel_z_offset;
-                    if corrected_z > 2.5 {
+                    if corrected_z < -2.5 {
                         // Was upside down during calibration, now upright
-                        self.accel_z_offset = self.accel_z_offset + 2.0; // Correct offset
+                        self.accel_z_offset = self.accel_z_offset - 2.0; // Correct offset
                         self.flipped = false;
-                    } else if corrected_z < 0.2 && self.flipped {
+                    } else if corrected_z > -0.2 && self.flipped {
                         // Currently upside down (hysteresis)
-                    } else if corrected_z < -0.2 {
+                    } else if corrected_z > 0.2 {
                         // Turned upside down
                         self.flipped = true;
                     } else {
