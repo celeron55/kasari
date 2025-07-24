@@ -169,6 +169,7 @@ async fn main(spawner: Spawner) {
 
     // GPIO
     let rc_receiver_ch1_pinmap = peripherals.GPIO34;
+    let mut led_pin = Output::new(peripherals.GPIO2, Level::Low, OutputConfig::default());
 
     // ADC (battery voltage monitoring)
     let mut adc1_config = AdcConfig::new();
@@ -503,6 +504,14 @@ async fn main(spawner: Spawner) {
                 modulator.mcp = None;
             }
         });
+
+        // This allows checking that the accerometer has been calibrated when
+        // the robot is idling
+        if libm::fabsf(logic.detector.rpm) < 100.0 && !logic.detector.flip_detector.is_flipped() {
+            led_pin.set_high();
+        } else {
+            led_pin.set_low();
+        }
 
         let current_ts = embassy_time::Instant::now().as_millis() as u32;
         if libm::fabsf(logic.detector.rpm) > 500.0 {
