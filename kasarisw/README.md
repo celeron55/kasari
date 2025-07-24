@@ -71,10 +71,15 @@ logic data (e.g., detector, plans) uniformly, avoiding duplication. Flags like
 ## Build/Run
 ### PC Simulator
 ```sh
-cargo build-pc  # Alias for cargo build --features pc
+cargo +stable build-pc  # Alias for cargo build --features pc
 ./target/debug/simulator [OPTIONS] [SOURCE]  # SOURCE: log file or --sim for virtual
 ```
 Options: --debug, --inject-autonomous, --lidar-distance-offset <MM>, --sim.
+
+Profiling using flamegraph:
+```sh
+cargo +stable flamegraph -b simulator --features=pc -- --sim
+```
 
 ### Embedded Firmware
 ```sh
