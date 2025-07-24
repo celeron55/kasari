@@ -625,10 +625,10 @@ fn uart2_handler() {
                 if *buf_guard.get(0).unwrap_or(&0) != sensors::HEAD_BYTE {
                     // Skip invalid until head or end
                     while let Some(&byte) = buf_guard.get(0) {
-                        buf_guard.dequeue();
                         if byte == sensors::HEAD_BYTE {
                             break;
                         }
+                        buf_guard.dequeue();
                         let skipped = LIDAR_SKIPPED_BYTE_COUNT.fetch_add(1, Ordering::Relaxed);
                         // Report skipped bytes for one packet's length
                         if skipped < sensors::PACKET_SIZE as u32 {
@@ -645,7 +645,6 @@ fn uart2_handler() {
                 for i in 0..sensors::PACKET_SIZE {
                     LIDAR_VALID_BYTE_COUNT.fetch_add(1, Ordering::Relaxed);
                     packet[i] = buf_guard.dequeue().unwrap_or(0);
-                    println!("LIVALI {:02x}", packet[i]);
                 }
 
                 if let Some(parsed) = sensors::parse_packet(&packet) {
