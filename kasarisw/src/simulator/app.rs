@@ -4,7 +4,7 @@ use crate::physics::{Rect, Robot, World};
 use crate::sources::EventSource;
 use crate::sources::FileEventSource;
 use crate::sources::SimEventSource;
-use eframe::egui;
+use eframe::egui::{self, TextStyle};
 use egui_plot::{Line, Plot, PlotBounds, PlotPoints};
 use kasarisw::shared::algorithm::{BIN_ANGLE_STEP, NUM_BINS};
 use kasarisw::shared::kasari::{InputEvent, MainLogic, MotorControlPlan};
@@ -91,7 +91,7 @@ impl MyApp {
             self.latest_planner = Some(event.clone());
             self.show_planner_theta = true;
             if self.debug {
-                println!("Processed Planner ts={} plan={:?} theta={:.4} (sim: {:.4}) rpm={:.2} (sim: {:.4})", ts, plan, *theta, self.event_source.get_logic().unwrap().detector.theta, rpm, self.event_source.get_logic().unwrap().detector.rpm);
+                println!("Processed Planner ts={} plan={:?} theta={:.4} (sim: {:.4}) rpm={:.2} (sim: {:.2})", ts, plan, *theta, self.event_source.get_logic().unwrap().detector.theta, rpm, self.event_source.get_logic().unwrap().detector.rpm);
             }
         }
         if let InputEvent::Stats(ts, stats) = event {
@@ -108,6 +108,34 @@ impl MyApp {
         }
         self.current_event_idx += 1;
     }
+
+    fn configure_fonts(&self, ctx: &egui::Context) {
+        let mut style = (*ctx.style()).clone();
+        style.text_styles = [
+            (
+                egui::TextStyle::Heading,
+                egui::FontId::new(24.0, egui::FontFamily::Proportional),
+            ),
+            (
+                egui::TextStyle::Body,
+                egui::FontId::new(16.0, egui::FontFamily::Proportional),
+            ),
+            (
+                egui::TextStyle::Monospace,
+                egui::FontId::new(14.0, egui::FontFamily::Monospace),
+            ),
+            (
+                egui::TextStyle::Button,
+                egui::FontId::new(14.0, egui::FontFamily::Proportional),
+            ),
+            (
+                egui::TextStyle::Small,
+                egui::FontId::new(12.0, egui::FontFamily::Proportional),
+            ),
+        ]
+        .into();
+        ctx.set_style(style);
+    }
 }
 
 fn world_to_local(wx: f32, wy: f32, pos_x: f32, pos_y: f32, theta: f32) -> (f64, f64) {
@@ -122,6 +150,9 @@ fn world_to_local(wx: f32, wy: f32, pos_x: f32, pos_y: f32, theta: f32) -> (f64,
 
 impl eframe::App for MyApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Set custom font sizes
+        self.configure_fonts(ctx);
+
         let now = Instant::now();
         let delta_real = now.duration_since(self.last_real).as_secs_f64();
         self.last_real = now;
@@ -233,45 +264,167 @@ impl eframe::App for MyApp {
         });
         // Stats from event log
         let step_min_duration_us = self.latest_stats.as_ref().map_or(0, |p| {
-            if let InputEvent::Stats(ts, stats) = p {
+            if let InputEvent::Stats(_, stats) = p {
                 stats.step_min_duration_us
             } else {
                 0
             }
         });
         let step_avg_duration_us = self.latest_stats.as_ref().map_or(0, |p| {
-            if let InputEvent::Stats(ts, stats) = p {
+            if let InputEvent::Stats(_, stats) = p {
                 stats.step_avg_duration_us
             } else {
                 0
             }
         });
         let step_max_duration_us = self.latest_stats.as_ref().map_or(0, |p| {
-            if let InputEvent::Stats(ts, stats) = p {
+            if let InputEvent::Stats(_, stats) = p {
                 stats.step_max_duration_us
             } else {
                 0
             }
         });
 
-        let robot_opt = self.event_source.get_robot();
-        let world_opt = self.event_source.get_world();
+        // Left panel for stats
+        egui::SidePanel::left("stats_panel")
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.add_space(5.0);
 
+                // Define a larger font style for the grid
+                let large_text = TextStyle::Name("LargeText".into());
+                ui.style_mut().text_styles.insert(
+                    large_text.clone(),
+                    egui::FontId::new(20.0, egui::FontFamily::Proportional),
+                );
+
+                egui::Grid::new("stats_grid")
+                    .num_columns(2)
+                    .spacing([10.0, 5.0])
+                    .striped(true)
+                    .show(ui, |ui| {
+                        ui.label(egui::RichText::new("Events:").text_style(large_text.clone()).color(egui::Color32::from_gray(220)));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(
+                                egui::RichText::new(format!("{:>8}", self.current_event_idx))
+                                    .text_style(large_text.clone()).color(egui::Color32::from_gray(220)),
+                            );
+                        });
+                        ui.end_row();
+
+                        ui.label(egui::RichText::new("Timestamp:").text_style(large_text.clone()).color(egui::Color32::from_gray(220)));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{:0>7} ms",
+                                    self.event_source
+                                        .get_logic()
+                                        .unwrap()
+                                        .detector
+                                        .last_ts
+                                        .unwrap_or(0)
+                                        / 1000
+                                ))
+                                .text_style(large_text.clone()).color(egui::Color32::from_gray(220)),
+                            );
+                        });
+                        ui.end_row();
+
+                        ui.label(
+                            egui::RichText::new("Simulator RPM:").text_style(large_text.clone()).color(egui::Color32::from_gray(220)),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{:>8.2}",
+                                    self.event_source.get_logic().unwrap().detector.rpm
+                                ))
+                                .text_style(large_text.clone()).color(egui::Color32::from_gray(220)),
+                            );
+                        });
+                        ui.end_row();
+
+                        ui.label(
+                            egui::RichText::new("Measured RPM:").text_style(large_text.clone()).color(egui::Color32::from_gray(220)),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(
+                                egui::RichText::new(format!("{:>8.2}", measured_rpm))
+                                    .text_style(large_text.clone()).color(egui::Color32::from_gray(220)),
+                            );
+                        });
+                        ui.end_row();
+
+                        ui.label(egui::RichText::new("Target RPM:").text_style(large_text.clone()).color(egui::Color32::from_gray(220)));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(
+                                egui::RichText::new(format!("{:>8.2}", target_rpm))
+                                    .text_style(large_text.clone()).color(egui::Color32::from_gray(220)),
+                            );
+                        });
+                        ui.end_row();
+
+                        ui.label(
+                            egui::RichText::new("Flipped (simulated):").text_style(large_text.clone()).color(egui::Color32::from_gray(220)),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{:>8}",
+                                    self.event_source.get_robot_flipped()
+                                ))
+                                .text_style(large_text.clone()).color(egui::Color32::from_gray(220)),
+                            );
+                        });
+                        ui.end_row();
+
+                        ui.label(
+                            egui::RichText::new("Flipped (measured):").text_style(large_text.clone()).color(egui::Color32::from_gray(220)),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{:>8}",
+                                    self.event_source.get_logic().unwrap().detector.flipped
+                                ))
+                                .text_style(large_text.clone()).color(egui::Color32::from_gray(220)),
+                            );
+                        });
+                        ui.end_row();
+
+                        ui.label(egui::RichText::new("MainLogic step() min:").text_style(large_text.clone()).color(egui::Color32::from_gray(220)));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(
+                                egui::RichText::new(format!("{:>8} us", step_min_duration_us))
+                                    .text_style(large_text.clone()).color(egui::Color32::from_gray(220)),
+                            );
+                        });
+                        ui.end_row();
+
+                        ui.label(egui::RichText::new("MainLogic step() avg:").text_style(large_text.clone()).color(egui::Color32::from_gray(220)));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(
+                                egui::RichText::new(format!("{:>8} us", step_avg_duration_us))
+                                    .text_style(large_text.clone()).color(egui::Color32::from_gray(220)),
+                            );
+                        });
+                        ui.end_row();
+
+                        ui.label(egui::RichText::new("MainLogic step() max:").text_style(large_text.clone()).color(egui::Color32::from_gray(220)));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(
+                                egui::RichText::new(format!("{:>8} us", step_max_duration_us))
+                                    .text_style(large_text.clone()).color(egui::Color32::from_gray(220)),
+                            );
+                        });
+                        ui.end_row();
+                    });
+            });
+
+        // Central panel for LIDAR plot
         egui::CentralPanel::default().show(ctx, |ui| {
-            let heading_text = format!(
-                "Real-Time Robot LiDAR Simulation\nEvents: {}, TS: {} ms, Simulator RPM: {:.2}, Measured RPM: {:.2}, Target RPM: {:.2}, flipped: {} (simulated) {} (measured), Step duration min: {}, avg: {}, max: {}",
-                self.current_event_idx,
-                self.event_source.get_logic().unwrap().detector.last_ts.unwrap_or(0) / 1000,
-                self.event_source.get_logic().unwrap().detector.rpm,
-                measured_rpm,
-                target_rpm,
-                self.event_source.get_robot_flipped(),
-                self.event_source.get_logic().unwrap().detector.flipped,
-                step_min_duration_us,
-                step_avg_duration_us,
-                step_max_duration_us,
-            );
-            ui.heading(heading_text);
+            let robot_opt = self.event_source.get_robot();
+            let world_opt = self.event_source.get_world();
 
             let plot = Plot::new("lidar_plot")
                 .include_x(-800.0)
@@ -288,22 +441,25 @@ impl eframe::App for MyApp {
             plot.show(ui, |plot_ui| {
                 plot_ui.set_plot_bounds(PlotBounds::from_min_max([-800., -800.], [800., 800.]));
 
-                let points: Vec<[f64; 2]> = (0..NUM_BINS).filter_map(|i| {
-                    let d = self.event_source.get_logic().unwrap().detector.bins_dist[i];
-                    if d.is_finite() {
-                        let angle = i as f32 * BIN_ANGLE_STEP;
-                        Some([(d * angle.cos()) as f64, (d * angle.sin()) as f64])
-                    } else {
-                        None
-                    }
-                }).collect();
+                let points: Vec<[f64; 2]> = (0..NUM_BINS)
+                    .filter_map(|i| {
+                        let d = self.event_source.get_logic().unwrap().detector.bins_dist[i];
+                        if d.is_finite() {
+                            let angle = i as f32 * BIN_ANGLE_STEP;
+                            Some([(d * angle.cos()) as f64, (d * angle.sin()) as f64])
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
                 plot_ui.points(
                     egui_plot::Points::new(points)
                         .color(egui::Color32::BLUE)
                         .radius(5.0),
                 );
 
-                let h_points: Vec<[f64; 2]> = self.current_lidar_points
+                let h_points: Vec<[f64; 2]> = self
+                    .current_lidar_points
                     .iter()
                     .map(|&(x, y)| [x as f64, y as f64])
                     .collect();
@@ -314,8 +470,10 @@ impl eframe::App for MyApp {
                 );
 
                 let heading_len: f64 = 200.0;
-                let hx = heading_len * self.event_source.get_logic().unwrap().detector.theta.cos() as f64;
-                let hy = heading_len * self.event_source.get_logic().unwrap().detector.theta.sin() as f64;
+                let hx = heading_len
+                    * self.event_source.get_logic().unwrap().detector.theta.cos() as f64;
+                let hy = heading_len
+                    * self.event_source.get_logic().unwrap().detector.theta.sin() as f64;
                 plot_ui.line(
                     Line::new(PlotPoints::new(vec![[0.0, 0.0], [hx, hy]]))
                         .color(egui::Color32::LIGHT_BLUE)
@@ -372,43 +530,6 @@ impl eframe::App for MyApp {
                     }
                 }
 
-                // The motor part is currently commented out for clarity
-                // Modulation is known to work so we don't need to see this
-                /*let motor_radius: f64 = 40.0;
-                let speed_scale: f64 = 2.0 / 30.0;
-                let left_phi: f32 = PI / 2.0 + self.event_source.get_logic().unwrap().detector.theta;
-                let right_phi: f32 = -PI / 2.0 + self.event_source.get_logic().unwrap().detector.theta;
-                let left_pos: [f64; 2] = [motor_radius * left_phi.cos() as f64, motor_radius * left_phi.sin() as f64];
-                let right_pos: [f64; 2] = [motor_radius * right_phi.cos() as f64, right_phi.sin() as f64];
-                let left_dir: [f64; 2] = [-left_phi.sin() as f64, left_phi.cos() as f64];
-                let right_dir: [f64; 2] = [-right_phi.sin() as f64, right_phi.cos() as f64];
-                let left_vec: [f64; 2] = [left_dir[0] * left_rpm as f64 * speed_scale, left_dir[1] * left_rpm as f64 * speed_scale];
-                let right_vec: [f64; 2] = [right_dir[0] * right_rpm as f64 * speed_scale, right_dir[1] * right_rpm as f64 * speed_scale];
-
-                // Motor positions
-                plot_ui.points(
-                    egui_plot::Points::new(vec![left_pos])
-                        .color(egui::Color32::WHITE)
-                        .radius(3.0),
-                );
-                plot_ui.points(
-                    egui_plot::Points::new(vec![right_pos])
-                        .color(egui::Color32::WHITE)
-                        .radius(3.0),
-                );
-
-                // Target speed vectors
-                plot_ui.line(
-                    Line::new(PlotPoints::new(vec![left_pos, [left_pos[0] + left_vec[0], left_pos[1] + left_vec[1]]]))
-                        .color(egui::Color32::from_rgb(255, 0, 0))
-                        .width(2.0),
-                );
-                plot_ui.line(
-                    Line::new(PlotPoints::new(vec![right_pos, [right_pos[0] + right_vec[0], right_pos[1] + right_vec[1]]]))
-                        .color(egui::Color32::from_rgb(0, 255, 0))
-                        .width(2.0),
-                );*/
-
                 if let Some(event) = &self.latest_planner {
                     if let InputEvent::Planner(ts, plan, cw, os, op, theta, rpm) = event {
                         let offset = self.theta_offset;
@@ -416,7 +537,8 @@ impl eframe::App for MyApp {
                         // Draw detection and movement vectors as large dots after rotation
                         let dot_radius = 10.0;
                         if plan.movement_x != 0.0 || plan.movement_y != 0.0 {
-                            let (rot_x, rot_y) = self.rotate_point(plan.movement_x, plan.movement_y, offset);
+                            let (rot_x, rot_y) =
+                                self.rotate_point(plan.movement_x, plan.movement_y, offset);
                             plot_ui.points(
                                 egui_plot::Points::new(vec![[rot_x * 200.0, rot_y * 200.0]])
                                     .color(egui::Color32::from_rgb(255, 165, 0)) // Orange
@@ -474,7 +596,8 @@ impl eframe::App for MyApp {
                     rects.push(robot_rect);
 
                     // This aligns the rectangles to the lidar plot
-                    let world_theta = self.event_source.get_logic().unwrap().detector.theta - robot.theta;
+                    let world_theta =
+                        self.event_source.get_logic().unwrap().detector.theta - robot.theta;
 
                     for r in rects {
                         let corners = vec![
