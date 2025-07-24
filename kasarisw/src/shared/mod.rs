@@ -775,14 +775,14 @@ pub mod kasari {
 
             let phase = atan2f(target_movement_y, target_movement_x);
 
-            let (left_rpm, right_rpm) = if self.flipped {
-                // Swap motors and negate modulation when flipped
-                let mod_half = -MODULATION_AMPLITUDE * mag * cosf(self.theta - phase);
-                (base_rpm - mod_half, base_rpm + mod_half)
-            } else {
-                let mod_half = MODULATION_AMPLITUDE * mag * cosf(self.theta - phase);
-                (base_rpm + mod_half, base_rpm - mod_half)
-            };
+            let mod_half = MODULATION_AMPLITUDE
+                * mag
+                * cosf(self.theta - phase)
+                * if self.flipped { -1.0 } else { 1.0 };
+
+            let left_rpm = base_rpm - mod_half;
+            let right_rpm = base_rpm + mod_half;
+
             (left_rpm, right_rpm)
         }
     }
