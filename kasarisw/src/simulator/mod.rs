@@ -13,8 +13,8 @@ mod physics;
 mod sources;
 
 use app::MyApp;
-use sources::{EventSource, FileEventSource, SimEventSource};
 use events::get_ts;
+use sources::{EventSource, FileEventSource, SimEventSource};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
