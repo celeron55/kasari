@@ -87,7 +87,9 @@ cargo run-esp  # Alias for cargo run --target xtensa-esp32-none-elf --features e
 
 ## Monitoring/Control
 - GUI: `python tools/event_monitor.py` (connect to 192.168.2.1:8080 AP or STA IP:8080).
-- Features: View sensors/planner, toggle modes (1=manual sliders, 2=autonomous), auto-log JSON.
+  - Features: View sensors/planner, toggle modes (1=manual sliders, 2=autonomous), auto-log JSON.
+- CLI Download: `python tools/download_events.py [IP:PORT]` (defaults to
+  192.168.1.248:8081; downloads flash-stored events, splits into JSON logs).
 - CLI: `nc IP 8080 | python tools/parse_events.py > log.json`.
 - Events: Binary (tag XOR 0x5555 + payload) over TCP; JSON in logs.
 
