@@ -78,7 +78,7 @@ Options: --debug, --inject-autonomous, --lidar-distance-offset <MM>, --sim.
 
 Profiling using flamegraph:
 ```sh
-cargo +stable flamegraph -b simulator --features=pc -- --sim
+cargo +stable flamegraph -b simulator --features=pc -- --sim --headless
 ```
 
 ### Embedded Firmware

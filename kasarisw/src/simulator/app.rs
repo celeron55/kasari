@@ -12,7 +12,7 @@ use std::io::Error as IoError;
 use std::time::Instant;
 
 pub struct MyApp {
-    event_source: Box<dyn EventSource>,
+    pub event_source: Box<dyn EventSource>,
     current_event_idx: usize, // For display purposes, count processed
     virtual_elapsed: f64,
     first_ts: u64,
@@ -85,7 +85,7 @@ impl MyApp {
         (new_x as f64, new_y as f64)
     }
 
-    fn process_event(&mut self, event: &InputEvent) {
+    pub fn process_event(&mut self, event: &InputEvent) {
         if let InputEvent::Planner(ts, plan, cw, os, op, theta, rpm) = event {
             self.theta_offset = self.event_source.get_logic().unwrap().detector.theta - *theta;
             self.latest_planner = Some(event.clone());
