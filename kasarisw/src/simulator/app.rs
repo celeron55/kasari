@@ -435,7 +435,7 @@ impl eframe::App for MyApp {
                             ui.label(
                                 egui::RichText::new(format!(
                                     "{:>8}",
-                                    self.event_source.get_logic().unwrap().detector.flipped
+                                    self.event_source.get_logic().unwrap().detector.flip_detector.is_flipped()
                                 ))
                                 .text_style(large_text.clone())
                                 .color(egui::Color32::from_gray(220)),

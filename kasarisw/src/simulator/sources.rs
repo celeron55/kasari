@@ -477,7 +477,7 @@ impl SimEventSource {
                             *ts,
                             self.control_logic.detector.theta,
                             plan.clone(),
-                            self.control_logic.detector.flipped,
+                            self.control_logic.detector.flip_detector.is_flipped(),
                         );
                     }
                 }

@@ -15,6 +15,7 @@ use embassy_time::Instant;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub mod algorithm;
+pub mod flip_detector;
 use algorithm::{DetectionResult, ObjectDetector};
 
 pub const TARGET_RPM: f32 = 1000.0;
