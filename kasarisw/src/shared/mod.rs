@@ -21,8 +21,8 @@ pub const TARGET_RPM: f32 = 1000.0;
 pub const MIN_MOVE_RPM: f32 = 550.0;
 pub const MIN_ATTACK_RPM: f32 = 800.0;
 
-pub const MOVEMENT_SPEED_CENTER: f32 = 0.7;
-pub const MOVEMENT_SPEED_ATTACK: f32 = 1.4;
+pub const MOVEMENT_SPEED_CENTER: f32 = 1.0;
+pub const MOVEMENT_SPEED_ATTACK: f32 = 1.0;
 
 pub const MAX_RPM_RAMP_RATE: f32 = 2000.0; // rpm/s
 pub const RPM_INITIAL_JUMP: f32 = 500.0; // rpm
@@ -464,13 +464,13 @@ pub mod kasari {
                         let k = 0.5; // Bias factor
                         let blended_x = center_x + k * norm_perp_x * center_len;
                         let blended_y = center_y + k * norm_perp_y * center_len;
-                        let throttle = ((center_len - 50.0 + (wall_dist - 300.0).max(0.0)) / 200.0)
+                        let throttle = ((center_len - 50.0) / 200.0)
                             .max(0.1)
                             .min(1.0);
                         (blended_x, blended_y, MOVEMENT_SPEED_CENTER * throttle)
                     } else {
                         // Not aligned, use center directly
-                        let throttle = ((center_len - 50.0 + (wall_dist - 300.0).max(0.0)) / 200.0)
+                        let throttle = ((center_len - 50.0) / 200.0)
                             .max(0.1)
                             .min(1.0);
                         (center_x, center_y, MOVEMENT_SPEED_CENTER * throttle)

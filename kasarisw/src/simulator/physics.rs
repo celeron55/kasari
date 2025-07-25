@@ -146,8 +146,8 @@ impl Robot {
 
         const HALF_SIZE: f32 = 70.0;
         const ELASTICITY: f32 = 0.5;
-        const TANGENTIAL_KICK: f32 = 0.8;
-        const KICK_RPM_FACTOR: f32 = 0.3;
+        const TANGENTIAL_KICK: f32 = 0.5;
+        const KICK_RPM_FACTOR: f32 = 0.2;
 
         // Handle arena collisions
         let mut robot_min_x = self.pos_x - HALF_SIZE;
