@@ -348,24 +348,7 @@ impl eframe::App for MyApp {
                         ui.end_row();
 
                         ui.label(
-                            egui::RichText::new("Simulator RPM:")
-                                .text_style(large_text.clone())
-                                .color(egui::Color32::from_gray(220)),
-                        );
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(
-                                egui::RichText::new(format!(
-                                    "{:>8.2}",
-                                    self.event_source.get_logic().unwrap().detector.rpm
-                                ))
-                                .text_style(large_text.clone())
-                                .color(egui::Color32::from_gray(220)),
-                            );
-                        });
-                        ui.end_row();
-
-                        ui.label(
-                            egui::RichText::new("Measured RPM:")
+                            egui::RichText::new("Target: Measured RPM:")
                                 .text_style(large_text.clone())
                                 .color(egui::Color32::from_gray(220)),
                         );
@@ -379,7 +362,7 @@ impl eframe::App for MyApp {
                         ui.end_row();
 
                         ui.label(
-                            egui::RichText::new("Target RPM:")
+                            egui::RichText::new("Target: Target RPM:")
                                 .text_style(large_text.clone())
                                 .color(egui::Color32::from_gray(220)),
                         );
@@ -393,7 +376,7 @@ impl eframe::App for MyApp {
                         ui.end_row();
 
                         ui.label(
-                            egui::RichText::new("Battery:")
+                            egui::RichText::new("Target: Battery:")
                                 .text_style(large_text.clone())
                                 .color(egui::Color32::from_gray(220)),
                         );
@@ -412,7 +395,66 @@ impl eframe::App for MyApp {
                         ui.end_row();
 
                         ui.label(
-                            egui::RichText::new("Flipped (simulated):")
+                            egui::RichText::new("Target: MainLogic step() min:")
+                                .text_style(large_text.clone())
+                                .color(egui::Color32::from_gray(220)),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(
+                                egui::RichText::new(format!("{:>8} us", step_min_duration_us))
+                                    .text_style(large_text.clone())
+                                    .color(egui::Color32::from_gray(220)),
+                            );
+                        });
+                        ui.end_row();
+
+                        ui.label(
+                            egui::RichText::new("Target: MainLogic step() avg:")
+                                .text_style(large_text.clone())
+                                .color(egui::Color32::from_gray(220)),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(
+                                egui::RichText::new(format!("{:>8} us", step_avg_duration_us))
+                                    .text_style(large_text.clone())
+                                    .color(egui::Color32::from_gray(220)),
+                            );
+                        });
+                        ui.end_row();
+
+                        ui.label(
+                            egui::RichText::new("Target: MainLogic step() max:")
+                                .text_style(large_text.clone())
+                                .color(egui::Color32::from_gray(220)),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(
+                                egui::RichText::new(format!("{:>8} us", step_max_duration_us))
+                                    .text_style(large_text.clone())
+                                    .color(egui::Color32::from_gray(220)),
+                            );
+                        });
+                        ui.end_row();
+
+                        ui.label(
+                            egui::RichText::new("Sim: Measured RPM:")
+                                .text_style(large_text.clone())
+                                .color(egui::Color32::from_gray(220)),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{:>8.2}",
+                                    self.event_source.get_logic().unwrap().detector.rpm
+                                ))
+                                .text_style(large_text.clone())
+                                .color(egui::Color32::from_gray(220)),
+                            );
+                        });
+                        ui.end_row();
+
+                        ui.label(
+                            egui::RichText::new("Sim: Flipped:")
                                 .text_style(large_text.clone())
                                 .color(egui::Color32::from_gray(220)),
                         );
@@ -429,7 +471,7 @@ impl eframe::App for MyApp {
                         ui.end_row();
 
                         ui.label(
-                            egui::RichText::new("Wall distances (measured):")
+                            egui::RichText::new("Sim: Wall distances:")
                                 .text_style(large_text.clone())
                                 .color(egui::Color32::from_gray(220)),
                         );
@@ -469,7 +511,7 @@ impl eframe::App for MyApp {
                         ui.end_row();
 
                         ui.label(
-                            egui::RichText::new("Position (measured):")
+                            egui::RichText::new("Sim: Position:")
                                 .text_style(large_text.clone())
                                 .color(egui::Color32::from_gray(220)),
                         );
@@ -497,7 +539,7 @@ impl eframe::App for MyApp {
                         ui.end_row();
 
                         ui.label(
-                            egui::RichText::new("Velocity (measured):")
+                            egui::RichText::new("Sim: Velocity:")
                                 .text_style(large_text.clone())
                                 .color(egui::Color32::from_gray(220)),
                         );
@@ -525,7 +567,7 @@ impl eframe::App for MyApp {
                         ui.end_row();
 
                         ui.label(
-                            egui::RichText::new("Velocity/intended ratio:")
+                            egui::RichText::new("Sim: Velocity/intended ratio:")
                                 .text_style(large_text.clone())
                                 .color(egui::Color32::from_gray(220)),
                         );
@@ -542,7 +584,44 @@ impl eframe::App for MyApp {
                         ui.end_row();
 
                         ui.label(
-                            egui::RichText::new("Angular correction flip:")
+                            egui::RichText::new("Sim: Intended angle change:")
+                                .text_style(large_text.clone())
+                                .color(egui::Color32::from_gray(220)),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{}",
+                                    self.event_source.get_logic().unwrap().intended_angle_change
+                                ))
+                                .text_style(large_text.clone())
+                                .color(egui::Color32::from_gray(220)),
+                            );
+                        });
+                        ui.end_row();
+
+                        ui.label(
+                            egui::RichText::new("Sim: Velocity/intended integrator:")
+                                .text_style(large_text.clone())
+                                .color(egui::Color32::from_gray(220)),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{}",
+                                    self.event_source
+                                        .get_logic()
+                                        .unwrap()
+                                        .velocity_ratio_integrator
+                                ))
+                                .text_style(large_text.clone())
+                                .color(egui::Color32::from_gray(220)),
+                            );
+                        });
+                        ui.end_row();
+
+                        ui.label(
+                            egui::RichText::new("Sim: Angular correction flip:")
                                 .text_style(large_text.clone())
                                 .color(egui::Color32::from_gray(220)),
                         );
@@ -562,7 +641,7 @@ impl eframe::App for MyApp {
                         ui.end_row();
 
                         ui.label(
-                            egui::RichText::new("Angular correction:")
+                            egui::RichText::new("Sim: Angular correction:")
                                 .text_style(large_text.clone())
                                 .color(egui::Color32::from_gray(220)),
                         );
@@ -570,7 +649,7 @@ impl eframe::App for MyApp {
                             ui.label(
                                 egui::RichText::new(format!(
                                     "{}°",
-                                    ((self.event_source.get_logic().unwrap().angular_correction
+                                    ((self.event_source.get_logic().unwrap().angular_correction_total
                                         + PI)
                                         .rem_euclid(PI * 2.0)
                                         - PI)
@@ -579,48 +658,6 @@ impl eframe::App for MyApp {
                                 ))
                                 .text_style(large_text.clone())
                                 .color(egui::Color32::from_gray(220)),
-                            );
-                        });
-                        ui.end_row();
-
-                        ui.label(
-                            egui::RichText::new("MainLogic step() min:")
-                                .text_style(large_text.clone())
-                                .color(egui::Color32::from_gray(220)),
-                        );
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(
-                                egui::RichText::new(format!("{:>8} us", step_min_duration_us))
-                                    .text_style(large_text.clone())
-                                    .color(egui::Color32::from_gray(220)),
-                            );
-                        });
-                        ui.end_row();
-
-                        ui.label(
-                            egui::RichText::new("MainLogic step() avg:")
-                                .text_style(large_text.clone())
-                                .color(egui::Color32::from_gray(220)),
-                        );
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(
-                                egui::RichText::new(format!("{:>8} us", step_avg_duration_us))
-                                    .text_style(large_text.clone())
-                                    .color(egui::Color32::from_gray(220)),
-                            );
-                        });
-                        ui.end_row();
-
-                        ui.label(
-                            egui::RichText::new("MainLogic step() max:")
-                                .text_style(large_text.clone())
-                                .color(egui::Color32::from_gray(220)),
-                        );
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(
-                                egui::RichText::new(format!("{:>8} us", step_max_duration_us))
-                                    .text_style(large_text.clone())
-                                    .color(egui::Color32::from_gray(220)),
                             );
                         });
                         ui.end_row();

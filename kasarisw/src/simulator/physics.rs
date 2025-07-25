@@ -115,17 +115,14 @@ impl Robot {
         movement_y: f32,
         world: &World,
         detector_theta: f32,
+        angular_correction: f32,
     ) {
         self.theta += (self.rpm / 60.0 * 2.0 * PI) * dt;
         self.theta = rem_euclid_f32(self.theta, 2.0 * PI);
 
-        // Dynamic offset: fixed part + theta difference +
-        // lag compensation
+        // Dynamic offset: theta difference + angular correction
         let delta_theta = -(detector_theta - self.theta);
-        let omega = (self.rpm.abs() / 60.0 * 2.0 * PI);
-        let lag = 0.0 * omega;
-        let theta_off = 0.0 * lag;
-        let target_movement_angle_offset: f32 = PI * 0.0 + delta_theta + theta_off;
+        let target_movement_angle_offset: f32 = PI * 0.0 + delta_theta + angular_correction;
 
         let cos_off = cosf(target_movement_angle_offset);
         let sin_off = sinf(target_movement_angle_offset);

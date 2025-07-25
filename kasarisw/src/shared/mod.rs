@@ -203,10 +203,14 @@ pub mod kasari {
         stats_step_sum_us: u64,
         stats_step_min_us: u64,
         stats_step_max_us: u64,
+        last_intended_movement_angle: f32,
+        pub intended_angle_change: f32,
         pub velocity_ratio: f32,
-        pub angular_correction: f32,
+        pub velocity_ratio_integrator: f32,
+        angular_correction: f32,
         pub angular_correction_flip: bool,
         angular_correction_flip_ts: u64,
+        pub angular_correction_total: f32,
     }
 
     impl MainLogic {
@@ -237,10 +241,14 @@ pub mod kasari {
                 stats_step_sum_us: 0,
                 stats_step_min_us: 0,
                 stats_step_max_us: 0,
+                last_intended_movement_angle: 0.0,
+                intended_angle_change: 0.0,
                 velocity_ratio: 1.0,
+                velocity_ratio_integrator: 5000.0,
                 angular_correction: 0.0,
                 angular_correction_flip: false,
                 angular_correction_flip_ts: 0,
+                angular_correction_total: 0.0,
             }
         }
 
@@ -366,7 +374,7 @@ pub mod kasari {
             }
         }
 
-        fn compute_autonomous_movement(&self) -> (f32, f32) {
+        fn compute_autonomous_movement(&self, ts: u64) -> (f32, f32) {
             let wall_x = self.detection_state.closest_wall.0;
             let wall_y = self.detection_state.closest_wall.1;
             let wall_dist = sqrtf(wall_x * wall_x + wall_y * wall_y);
@@ -390,7 +398,7 @@ pub mod kasari {
                 }
             } else {
                 // Normal mode: alternate between center and object
-                let cycle_ts = get_current_timestamp() - self.autonomous_start_ts.unwrap_or(0);
+                let cycle_ts = ts - self.autonomous_start_ts.unwrap_or(0);
                 let phase = (cycle_ts % self.autonomous_cycle_period_us) as f32
                     / self.autonomous_cycle_period_us as f32;
                 // Pick a target and a speed depending on what the target is
@@ -514,7 +522,7 @@ pub mod kasari {
                 TARGET_RPM * if self.reverse_rotation { -1.0 } else { 1.0 };
 
             if fabsf(self.detector.rpm) >= MIN_MOVE_RPM {
-                let (x, y) = self.compute_autonomous_movement();
+                let (x, y) = self.compute_autonomous_movement(ts);
                 self.target.movement_x = x;
                 self.target.movement_y = y;
             } else {
@@ -559,7 +567,7 @@ pub mod kasari {
         ) {
             let step_start = get_current_timestamp();
 
-            if (timestamp as i64 - self.last_planner_ts as i64) >= 100_000 {
+            if (timestamp as i64 - self.last_planner_ts as i64) >= 50_000 {
                 self.last_planner_ts = timestamp;
 
                 let result = self.detector.detect_objects(debug);
@@ -585,55 +593,73 @@ pub mod kasari {
                     self.update_autonomous_targets(timestamp);
                 }
 
+                let intended_angle = atan2f(self.target.movement_y, self.target.movement_x);
+                self.intended_angle_change = rem_euclid_f32(
+                    intended_angle - self.last_intended_movement_angle + PI,
+                    2.0 * PI,
+                ) - PI;
+
                 let velocity_recent =
                     (timestamp - self.detector.last_pos_ts.unwrap_or(0)) < 100_000;
-                if velocity_recent {
-                    let intended_mag =
-                        sqrtf(self.target.movement_x.powi(2) + self.target.movement_y.powi(2));
-                    let vel_mag = sqrtf(
-                        self.detection_state.velocity.0.powi(2)
-                            + self.detection_state.velocity.1.powi(2),
-                    );
-                    if intended_mag > 0.3 {
-                        let velocity_ratio_unfiltered = vel_mag / intended_mag;
-                        self.velocity_ratio =
-                            self.velocity_ratio * 0.9 + velocity_ratio_unfiltered * 0.1;
+                if velocity_recent && self.intended_angle_change < 0.1 {
+                    self.velocity_ratio_integrator *= 0.9;
+                    let intended_mag_sq =
+                        self.target.movement_x.powi(2) + self.target.movement_y.powi(2);
+                    let dot = self.detection_state.velocity.0 * self.target.movement_x
+                        + self.detection_state.velocity.1 * self.target.movement_y;
+                    if intended_mag_sq > 0.3.powi(2) {
+                        let velocity_ratio_unfiltered = dot / intended_mag_sq;
+                        self.velocity_ratio = velocity_ratio_unfiltered;
+                        //self.velocity_ratio =
+                        //    self.velocity_ratio * 0.8 + velocity_ratio_unfiltered * 0.2;
                     }
-                    println!(
-                        "intended_mag: {}, vel_mag: {}, velocity_ratio: {}",
-                        intended_mag, vel_mag, self.velocity_ratio
-                    );
+                    self.velocity_ratio_integrator += self.velocity_ratio;
 
                     // Flip angular correction 180° if robot seems stuck to a wall
-                    if (self.detection_state.wall_distances.0 < 200.0
-                        || self.detection_state.wall_distances.1 < 200.0
-                        || self.detection_state.wall_distances.2 < 200.0
-                        || self.detection_state.wall_distances.3 < 200.0)
-                        && intended_mag > 0.3
-                        && self.velocity_ratio < 150.0
+                    if (self.detection_state.wall_distances.0 < 250.0
+                        || self.detection_state.wall_distances.1 < 220.0
+                        || self.detection_state.wall_distances.2 < 220.0
+                        || self.detection_state.wall_distances.3 < 220.0)
+                        && intended_mag_sq > 0.3.powi(2)
+                        && self.velocity_ratio_integrator < -5000.0
                         && timestamp - self.angular_correction_flip_ts > 3_000_000
                     {
                         self.angular_correction_flip_ts = timestamp;
                         self.angular_correction_flip = !self.angular_correction_flip;
-                        println!("angular_correction_flip: {}", self.angular_correction_flip);
+                        self.velocity_ratio_integrator = 5000.0;
+                        if debug {
+                            println!("angular_correction_flip: {}", self.angular_correction_flip);
+                        }
                     }
-                }
 
-                let intended_angle = atan2f(self.target.movement_y, self.target.movement_x);
-                let vel_angle = atan2f(
-                    self.detection_state.velocity.1,
-                    self.detection_state.velocity.0,
-                );
-                let mut delta = vel_angle - intended_angle
-                    + if self.angular_correction_flip {
+                    if debug {
+                        println!(
+                            "intended: {:.0},{:.0}, vel: {:.0},{:.0}, velocity_ratio: {}, integrator: {}, angular_correction_flip: {}",
+                            self.target.movement_x, self.target.movement_y, self.detection_state.velocity.0, self.detection_state.velocity.1, self.velocity_ratio, self.velocity_ratio_integrator, self.angular_correction_flip
+                        );
+                    }
+
+                    let vel_angle = atan2f(
+                        self.detection_state.velocity.1,
+                        self.detection_state.velocity.0,
+                    );
+                    let mut delta = vel_angle - intended_angle;
+                    delta = rem_euclid_f32(delta + PI, 2.0 * PI) - PI;
+                    const GAIN: f32 = 0.1;
+                    self.angular_correction = rem_euclid_f32(
+                        self.angular_correction - delta * GAIN,
+                        2.0 * PI,
+                    );
+                    let flip_angle = if self.angular_correction_flip {
                         PI
                     } else {
                         0.0
                     };
-                delta = rem_euclid_f32(delta + PI, 2.0 * PI) - PI;
-                const GAIN: f32 = 0.05;
-                self.angular_correction =
-                    rem_euclid_f32(self.angular_correction + delta * GAIN, 2.0 * PI);
+                    // This is passed to MotorModulator later
+                    self.angular_correction_total = self.angular_correction + flip_angle;
+                }
+
+                self.last_intended_movement_angle = intended_angle;
 
                 let plan = MotorControlPlan {
                     timestamp: timestamp,

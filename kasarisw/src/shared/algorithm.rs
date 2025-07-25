@@ -4,7 +4,7 @@
 use crate::shared::rem_euclid_f32;
 use arrayvec::ArrayVec;
 use core::f32::consts::PI;
-use libm::{atan2f, cosf, fabsf, sinf, sqrtf};
+use libm::{cosf, fabsf, sinf, sqrtf};
 use num_traits::float::FloatCore;
 
 pub const NUM_BINS: usize = 90; // 4° per bin
@@ -59,7 +59,6 @@ pub struct ObjectDetector {
     last_pos_y: f32,
     pub last_pos_ts: Option<u64>,
     velocity: (f32, f32),
-    prev_best_k: Option<usize>,
 }
 
 impl ObjectDetector {
@@ -84,13 +83,13 @@ impl ObjectDetector {
             last_pos_y: 0.0,
             last_pos_ts: None,
             velocity: (0.0, 0.0),
-            prev_best_k: None,
         }
     }
 
     pub fn accel_to_rpm(&self, accel_g: f32) -> f32 {
         let g = 9.81;
-        let r = 0.0145;
+        //let r = 0.0145; // Correct when RC receiver is uninstalled
+        let r = 0.0155; // Correct when RC receiver is installed
         let a_calibrated = accel_g - self.accel_offset;
         let a = a_calibrated.abs() * g;
         let omega = sqrtf(a / r);
@@ -229,27 +228,6 @@ impl ObjectDetector {
 
     pub fn bin_count(&self) -> usize {
         self.bins_dist.iter().filter(|&&d| d.is_finite()).count()
-    }
-
-    fn interp_dist(&self, phi: f32, delta: f32) -> f32 {
-        let mut f = (phi - delta) / BIN_ANGLE_STEP;
-        if f < 0.0 {
-            f += NUM_BINS as f32;
-        }
-        let low = f.floor() as usize;
-        let high = if low + 1 == NUM_BINS { 0 } else { low + 1 };
-        let frac = f - f.floor();
-        let d_low = self.bins_dist[low];
-        let d_high = self.bins_dist[high];
-        if d_low.is_finite() && d_high.is_finite() {
-            (1.0 - frac) * d_low + frac * d_high
-        } else if d_low.is_finite() {
-            d_low
-        } else if d_high.is_finite() {
-            d_high
-        } else {
-            f32::INFINITY
-        }
     }
 
     pub fn detect_objects(&mut self, debug: bool) -> DetectionResult {
@@ -529,236 +507,65 @@ impl ObjectDetector {
             }
         }
 
-        // New: Position and velocity estimation
-        let mut wall_distances = (f32::INFINITY, f32::INFINITY, f32::INFINITY, f32::INFINITY);
+        // Position and velocity estimation (simplified, no rotation fit)
+        let mut wall_distances = (0.0, 0.0, 0.0, 0.0);
         let mut position = (self.pos_x, self.pos_y);
         let mut velocity = self.velocity;
         let mut open_space = fallback_open_space;
 
         if self.bin_count() > 80 && self.last_ts.is_some() {
-            let mut best_error = f32::INFINITY;
-            let mut best_k = 0;
-            let mut best_d_left = 0.0;
-            let mut best_d_right = 0.0;
-            let mut best_d_bottom = 0.0;
-            let mut best_d_top = 0.0;
-            let mut best_temp_x = 0.0;
-            let mut best_temp_y = 0.0;
-            let mut best_temp_w = 0.0;
-            let mut best_temp_h = 0.0;
+            // Define directions and projection functions
+            let directions = [0.0, PI / 2.0, PI, 3.0 * PI / 2.0];
+            let proj_funcs: [fn(f32) -> f32; 4] = [cosf, sinf, |p| -cosf(p), |p| -sinf(p)];
+            let sector_spread = PI / 4.0;
 
-            for k in (0..NUM_BINS).step_by(2) {
-                let delta = k as f32 * BIN_ANGLE_STEP;
-                let d_right = self.interp_dist(0.0, delta);
-                let d_left = self.interp_dist(PI, delta);
-                let d_top = self.interp_dist(PI / 2.0, delta);
-                let d_bottom = self.interp_dist(3.0 * PI / 2.0, delta);
+            let mut wall_dists = [0.0f32; 4]; // 0: right (+x), 1: top (+y), 2: left (-x), 3: bottom (-y)
 
-                if d_left.is_infinite()
-                    || d_right.is_infinite()
-                    || d_bottom.is_infinite()
-                    || d_top.is_infinite()
-                {
-                    continue;
+            for dir in 0..4 {
+                let mut max_proj = 0.0f32;
+
+                for i in 0..NUM_BINS {
+                    let angle = i as f32 * BIN_ANGLE_STEP;
+                    let delta = rem_euclid_f32(angle - directions[dir] + PI, 2.0 * PI) - PI;
+                    if fabsf(delta) > sector_spread {
+                        continue;
+                    }
+                    let d = self.bins_dist[i];
+                    if !d.is_finite() {
+                        continue;
+                    }
+                    let proj = d * proj_funcs[dir](angle);
+                    if proj > max_proj {
+                        max_proj = proj;
+                    }
                 }
 
-                let temp_x = d_left;
-                let temp_y = d_bottom;
+                wall_dists[dir] = max_proj;
+            }
+
+            let d_right = wall_dists[0];
+            let d_top = wall_dists[1];
+            let d_left = wall_dists[2];
+            let d_bottom = wall_dists[3];
+
+            let all_positive = d_left > 0.0 && d_right > 0.0 && d_bottom > 0.0 && d_top > 0.0;
+
+            if all_positive {
                 let temp_w = d_left + d_right;
                 let temp_h = d_bottom + d_top;
 
-                let mut error = 0.0;
-                let mut valid_samples = 0;
-
-                // phi=0.0 (right)
-                let observed = d_right;
-                if !observed.is_finite() {
-                    error += 1000.0;
-                } else {
-                    let min_t = temp_w - temp_x;
-                    let diff = observed - min_t;
-                    if diff > 20.0 {
-                        error += (diff - 20.0).powi(2);
-                    }
-                    valid_samples += 1;
-                }
-
-                // phi=PI/2 (top)
-                let observed = d_top;
-                if !observed.is_finite() {
-                    error += 1000.0;
-                } else {
-                    let min_t = temp_h - temp_y;
-                    let diff = observed - min_t;
-                    if diff > 20.0 {
-                        error += (diff - 20.0).powi(2);
-                    }
-                    valid_samples += 1;
-                }
-
-                // phi=PI (left)
-                let observed = d_left;
-                if !observed.is_finite() {
-                    error += 1000.0;
-                } else {
-                    let min_t = temp_x;
-                    let diff = observed - min_t;
-                    if diff > 20.0 {
-                        error += (diff - 20.0).powi(2);
-                    }
-                    valid_samples += 1;
-                }
-
-                // phi=3*PI/2 (bottom)
-                let observed = d_bottom;
-                if !observed.is_finite() {
-                    error += 1000.0;
-                } else {
-                    let min_t = temp_y;
-                    let diff = observed - min_t;
-                    if diff > 20.0 {
-                        error += (diff - 20.0).powi(2);
-                    }
-                    valid_samples += 1;
-                }
-
-                if valid_samples >= 3 && error < best_error {
-                    best_error = error;
-                    best_k = k;
-                    best_d_left = d_left;
-                    best_d_right = d_right;
-                    best_d_bottom = d_bottom;
-                    best_d_top = d_top;
-                    best_temp_x = temp_x;
-                    best_temp_y = temp_y;
-                    best_temp_w = temp_w;
-                    best_temp_h = temp_h;
-                }
-            }
-
-            // Refine best_k by checking neighbors
-            if best_error < f32::INFINITY {
-                for dk in [-1i32, 1] {
-                    let k_ref = ((best_k as i32 + dk).rem_euclid(NUM_BINS as i32)) as usize;
-                    let delta = k_ref as f32 * BIN_ANGLE_STEP;
-                    let d_right = self.interp_dist(0.0, delta);
-                    let d_left = self.interp_dist(PI, delta);
-                    let d_top = self.interp_dist(PI / 2.0, delta);
-                    let d_bottom = self.interp_dist(3.0 * PI / 2.0, delta);
-
-                    if d_left.is_infinite()
-                        || d_right.is_infinite()
-                        || d_bottom.is_infinite()
-                        || d_top.is_infinite()
-                    {
-                        continue;
-                    }
-
-                    let temp_x = d_left;
-                    let temp_y = d_bottom;
-                    let temp_w = d_left + d_right;
-                    let temp_h = d_bottom + d_top;
-
-                    let mut error = 0.0;
-                    let mut valid_samples = 0;
-
-                    let observed = d_right;
-                    if !observed.is_finite() {
-                        error += 1000.0;
-                    } else {
-                        let min_t = temp_w - temp_x;
-                        let diff = observed - min_t;
-                        if diff > 20.0 {
-                            error += (diff - 20.0).powi(2);
-                        }
-                        valid_samples += 1;
-                    }
-
-                    let observed = d_top;
-                    if !observed.is_finite() {
-                        error += 1000.0;
-                    } else {
-                        let min_t = temp_h - temp_y;
-                        let diff = observed - min_t;
-                        if diff > 20.0 {
-                            error += (diff - 20.0).powi(2);
-                        }
-                        valid_samples += 1;
-                    }
-
-                    let observed = d_left;
-                    if !observed.is_finite() {
-                        error += 1000.0;
-                    } else {
-                        let min_t = temp_x;
-                        let diff = observed - min_t;
-                        if diff > 20.0 {
-                            error += (diff - 20.0).powi(2);
-                        }
-                        valid_samples += 1;
-                    }
-
-                    let observed = d_bottom;
-                    if !observed.is_finite() {
-                        error += 1000.0;
-                    } else {
-                        let min_t = temp_y;
-                        let diff = observed - min_t;
-                        if diff > 20.0 {
-                            error += (diff - 20.0).powi(2);
-                        }
-                        valid_samples += 1;
-                    }
-
-                    if valid_samples >= 3 && error < best_error {
-                        best_error = error;
-                        best_k = k_ref;
-                        best_d_left = d_left;
-                        best_d_right = d_right;
-                        best_d_bottom = d_bottom;
-                        best_d_top = d_top;
-                        best_temp_x = temp_x;
-                        best_temp_y = temp_y;
-                        best_temp_w = temp_w;
-                        best_temp_h = temp_h;
-                    }
-                }
-            }
-
-            let error_threshold = 400.0;
-            if best_error < error_threshold {
-                // Stabilize best_k using previous (symmetry-aware)
-                if let Some(prev_k) = self.prev_best_k {
-                    let symmetry = NUM_BINS / 4; // 22
-                    let mut min_diff = i32::MAX;
-                    let mut adjusted_k = best_k;
-                    for rot in -2..3 {
-                        let candidate = ((best_k as i32 + rot * symmetry as i32)
-                            .rem_euclid(NUM_BINS as i32))
-                            as usize;
-                        let diff = (candidate as i32 - prev_k as i32).abs();
-                        let wrapped = diff.min(NUM_BINS as i32 - diff);
-                        if wrapped < min_diff {
-                            min_diff = wrapped;
-                            adjusted_k = candidate;
-                        }
-                    }
-                    best_k = adjusted_k;
-                }
-                self.prev_best_k = Some(best_k);
-
                 // Update arena size smoothed
                 if self.arena_w == 0.0 {
-                    self.arena_w = best_temp_w;
-                    self.arena_h = best_temp_h;
+                    self.arena_w = temp_w;
+                    self.arena_h = temp_h;
                 } else {
-                    self.arena_w = 0.9 * self.arena_w + 0.1 * best_temp_w;
-                    self.arena_h = 0.9 * self.arena_h + 0.1 * best_temp_h;
+                    self.arena_w = 0.9 * self.arena_w + 0.1 * temp_w;
+                    self.arena_h = 0.9 * self.arena_h + 0.1 * temp_h;
                 }
 
                 // Smooth position
-                let new_pos_x = best_temp_x;
-                let new_pos_y = best_temp_y;
+                let new_pos_x = d_left;
+                let new_pos_y = d_bottom;
                 let alpha_pos = 0.5;
                 if self.last_pos_ts.is_some() {
                     self.pos_x = alpha_pos * self.pos_x + (1.0 - alpha_pos) * new_pos_x;
@@ -771,7 +578,7 @@ impl ObjectDetector {
                 // Velocity
                 if let Some(last_ts) = self.last_pos_ts {
                     let dt = (self.last_ts.unwrap() - last_ts) as f32 / 1_000_000.0;
-                    if dt > 0.01 {
+                    if dt > 0.001 {
                         let new_vel_x = (self.pos_x - self.last_pos_x) / dt;
                         let new_vel_y = (self.pos_y - self.last_pos_y) / dt;
                         let beta_vel = 0.5;
@@ -789,7 +596,7 @@ impl ObjectDetector {
                 open_space = (center_x - self.pos_x, center_y - self.pos_y);
 
                 // Wall distances
-                wall_distances = (best_d_left, best_d_right, best_d_bottom, best_d_top);
+                wall_distances = (d_left, d_right, d_bottom, d_top);
             } // else fallback open_space already set
         }
 

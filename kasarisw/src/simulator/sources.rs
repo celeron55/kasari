@@ -291,6 +291,7 @@ pub struct SimEventSource {
     debug: bool,
     accelerometer_event_count: u64,
     rng: StdRng,
+    robot_flipped: bool,
 }
 
 impl SimEventSource {
@@ -301,7 +302,7 @@ impl SimEventSource {
         arena_height: f32,
         no_object: bool,
         reverse_rotation: bool,
-        _robot_flipped: bool,
+        robot_flipped: bool,
     ) -> Self {
         let channel = &*CHANNEL.init(PubSubChannel::new());
         let mut source = Self {
@@ -346,6 +347,7 @@ impl SimEventSource {
             debug,
             accelerometer_event_count: 0,
             rng: StdRng::seed_from_u64(42),
+            robot_flipped: false,
         };
 
         // Initial events at ts=0
@@ -377,12 +379,14 @@ impl SimEventSource {
             .control_logic
             .motor_control_plan
             .map_or(0.0, |p| p.movement_y);
+        let angular_correction_plus_flipped_state = if self.robot_flipped { PI } else { 0.0 };
         self.robot.update(
             dt,
             movement_x,
             movement_y,
             &self.world,
             self.control_logic.detector.theta,
+            self.control_logic.angular_correction_total + angular_correction_plus_flipped_state,
         );
     }
 
@@ -421,7 +425,7 @@ impl SimEventSource {
 
             if next_accel <= next_ts {
                 let omega = (self.robot.rpm / 60.0 * 2.0 * PI).abs();
-                let a_g = (omega * omega * 0.0145) / 9.81;
+                let a_g = (omega * omega * 0.0155) / 9.81;
                 // Allow calibration during the first 50 samples
                 let ay = if next_ts <= 500_000 { 0.0 } else { a_g };
                 // Simulate gravity plus noise
@@ -472,7 +476,7 @@ impl SimEventSource {
                             *ts,
                             self.control_logic.detector.theta,
                             plan.clone(),
-                            self.control_logic.angular_correction,
+                            self.control_logic.angular_correction_total,
                         );
                     }
                 }
@@ -505,7 +509,9 @@ impl EventSource for SimEventSource {
         Some(&self.control_logic)
     }
     fn get_robot_flipped(&self) -> bool {
-        false
+        self.robot_flipped
     }
-    fn set_robot_flipped(&mut self, _robot_flipped: bool) {}
+    fn set_robot_flipped(&mut self, robot_flipped: bool) {
+        self.robot_flipped = robot_flipped
+    }
 }
