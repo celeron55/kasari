@@ -408,7 +408,7 @@ impl ObjectDetector {
                 }
                 let avg_neighbor = sum_neighbor / neighbor_count;
                 let protrusion = avg_neighbor - dist;
-                if protrusion > 80.0 && 70.0 <= dist && dist <= 1200.0 {
+                if protrusion > 60.0 && 70.0 <= dist && dist <= 1200.0 {
                     if protrusion > max_protrusion {
                         max_protrusion = protrusion;
                         best_fallback_idx = i;
