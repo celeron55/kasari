@@ -671,7 +671,9 @@ pub mod kasari {
                 // This is passed to MotorModulator later
                 // We only do 0° and 180° now
                 self.angular_correction_total = if self.angular_correction_flip {
-                    PI
+                    //PI
+                    // Disable flip detection while focusing on other things
+                    0.0
                 } else {
                     0.0
                 };
