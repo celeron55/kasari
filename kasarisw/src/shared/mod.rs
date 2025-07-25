@@ -229,8 +229,8 @@ pub mod kasari {
                 last_planner_ts: 0,
                 autonomous_enabled: false,
                 autonomous_start_ts: None,
-                autonomous_cycle_period_us: 5_000_000, // 5 seconds
-                autonomous_duty_cycle: 0.6,            // 60% towards center, 40% towards object
+                autonomous_cycle_period_us: 8_000_000, // 8 seconds
+                autonomous_duty_cycle: 0.666,          // 66.6% towards center, 33.3% towards object
                 last_rpm_update_ts: None,
                 current_rotation_speed: 0.0,
                 target: ControlTargets::default(),
@@ -641,21 +641,23 @@ pub mod kasari {
                         );
                     }
 
-                    if velocity_mag_sq > 100.0.powi(2) {
-                        let vel_angle = atan2f(
-                            self.detection_state.velocity.1,
-                            self.detection_state.velocity.0,
-                        );
-                        let mut delta = vel_angle - intended_angle;
+                    let vel_angle = atan2f(
+                        self.detection_state.velocity.1,
+                        self.detection_state.velocity.0,
+                    );
+                    let mut delta = vel_angle - intended_angle;
+                    delta = rem_euclid_f32(delta + PI, 2.0 * PI) - PI;
+                    let gain = (sqrtf(velocity_mag_sq) / 4000.0).min(0.2);
+                    const max_change: f32 = PI * 0.1;
+                    let change = (delta * gain).max(-max_change).min(max_change);
+                    if debug {
                         println!(
-                            "intended_angle: {}, vel_angle: {}, delta: {}",
-                            vel_angle, intended_angle, delta
+                            "intended_angle: {}, vel_angle: {}, delta: {}, gain: {}, change: {}",
+                            vel_angle, intended_angle, delta, gain, change
                         );
-                        delta = rem_euclid_f32(delta + PI, 2.0 * PI) - PI;
-                        const GAIN: f32 = 0.05;
-                        self.angular_correction =
-                            rem_euclid_f32(self.angular_correction - delta * GAIN, 2.0 * PI);
                     }
+                    self.angular_correction =
+                        rem_euclid_f32(self.angular_correction - change, 2.0 * PI);
 
                     let flip_angle = if self.angular_correction_flip {
                         PI
