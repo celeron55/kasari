@@ -451,9 +451,9 @@ impl SimEventSource {
                 };
                 let angle_noise = if self.rng.sample(&Uniform::from(0.0..1.0)) > 0.9 {
                     if self.rng.sample(&Uniform::from(0.0..1.0)) > 0.9 {
-                        self.rng.sample(&Uniform::from(-0.5*PI..0.5*PI))
+                        self.rng.sample(&Uniform::from(-0.5 * PI..0.5 * PI))
                     } else {
-                        self.rng.sample(&Uniform::from(-0.05*PI..0.05*PI))
+                        self.rng.sample(&Uniform::from(-0.05 * PI..0.05 * PI))
                     }
                 } else {
                     0.0
@@ -464,7 +464,8 @@ impl SimEventSource {
                 let mut distances = [0.0; 4];
                 for i in 0..4 {
                     let angle =
-                        rem_euclid_f32(self.robot.theta - ((3 - i) as f32 * step_theta), 2.0 * PI) + angle_noise;
+                        rem_euclid_f32(self.robot.theta - ((3 - i) as f32 * step_theta), 2.0 * PI)
+                            + angle_noise;
                     let dir_x = angle.cos();
                     let dir_y = angle.sin();
                     let true_dist =
