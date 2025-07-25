@@ -24,8 +24,8 @@ pub const MIN_ATTACK_RPM: f32 = 800.0;
 pub const MOVEMENT_SPEED_CENTER: f32 = 1.3;
 pub const MOVEMENT_SPEED_ATTACK: f32 = 1.3;
 
-pub const MAX_RPM_RAMP_RATE: f32 = 2000.0; // rpm/s
-pub const RPM_INITIAL_JUMP: f32 = 500.0; // rpm
+pub const MAX_RPM_RAMP_RATE: f32 = 1500.0; // rpm/s
+pub const RPM_INITIAL_JUMP: f32 = 400.0; // rpm
 
 pub const RECEIVER_MAX_GAP_US: u64 = 1_000_000;
 
