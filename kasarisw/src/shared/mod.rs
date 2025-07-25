@@ -613,7 +613,7 @@ pub mod kasari {
                 let intended_movement_mag =
                     sqrtf(self.target.movement_x.powi(2) + self.target.movement_y.powi(2));
 
-                if intended_movement_mag < 0.05 || self.detector.rpm.abs() < MIN_MOVE_RPM {
+                if intended_movement_mag < 0.1 || self.detector.rpm.abs() < MIN_MOVE_RPM {
                     self.no_intended_movement_timestamp = timestamp;
                 }
 
@@ -645,9 +645,9 @@ pub mod kasari {
                 // direction or seems stuck to a wall (i.e. it might be flipped)
                 if timestamp - self.angular_correction_flip_ts > 6_000_000
                     && self.detector.rpm.abs() > MIN_MOVE_RPM
-                    && timestamp - self.no_intended_movement_timestamp > 1_000_000
-                    && ((timestamp - self.intended_movement_velocity_timestamp > 1_500_000
-                        && timestamp - self.away_from_wall_timestamp > 1_000_000)
+                    && timestamp - self.no_intended_movement_timestamp > 200_000
+                    && ((timestamp - self.intended_movement_velocity_timestamp > 2_500_000
+                        && timestamp - self.away_from_wall_timestamp > 1_500_000)
                         || timestamp - self.away_from_wall_timestamp > 3_000_000)
                 {
                     self.angular_correction_flip_ts = timestamp;
