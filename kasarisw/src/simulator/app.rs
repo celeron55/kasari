@@ -4,10 +4,12 @@ use crate::physics::{Rect, Robot, World};
 use crate::sources::EventSource;
 use crate::sources::FileEventSource;
 use crate::sources::SimEventSource;
+use core::f32::consts::PI;
 use eframe::egui::{self, TextStyle};
 use egui_plot::{Line, Plot, PlotBounds, PlotPoints};
 use kasarisw::shared::algorithm::{BIN_ANGLE_STEP, NUM_BINS};
 use kasarisw::shared::kasari::{InputEvent, MainLogic, MotorControlPlan};
+use num_traits::ops::euclid::Euclid;
 use std::io::Error as IoError;
 use std::time::Instant;
 
@@ -427,20 +429,153 @@ impl eframe::App for MyApp {
                         ui.end_row();
 
                         ui.label(
-                            egui::RichText::new("Flipped (measured):")
+                            egui::RichText::new("Wall distances (measured):")
                                 .text_style(large_text.clone())
                                 .color(egui::Color32::from_gray(220)),
                         );
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.label(
                                 egui::RichText::new(format!(
-                                    "{:>8}",
+                                    "{:.0}, {:.0}, {:.0}, {:.0}",
                                     self.event_source
                                         .get_logic()
                                         .unwrap()
-                                        .detector
-                                        .flip_detector
-                                        .is_flipped()
+                                        .detection_state
+                                        .wall_distances
+                                        .0,
+                                    self.event_source
+                                        .get_logic()
+                                        .unwrap()
+                                        .detection_state
+                                        .wall_distances
+                                        .1,
+                                    self.event_source
+                                        .get_logic()
+                                        .unwrap()
+                                        .detection_state
+                                        .wall_distances
+                                        .2,
+                                    self.event_source
+                                        .get_logic()
+                                        .unwrap()
+                                        .detection_state
+                                        .wall_distances
+                                        .3,
+                                ))
+                                .text_style(large_text.clone())
+                                .color(egui::Color32::from_gray(220)),
+                            );
+                        });
+                        ui.end_row();
+
+                        ui.label(
+                            egui::RichText::new("Position (measured):")
+                                .text_style(large_text.clone())
+                                .color(egui::Color32::from_gray(220)),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{:.0}, {:.0}",
+                                    self.event_source
+                                        .get_logic()
+                                        .unwrap()
+                                        .detection_state
+                                        .position
+                                        .0,
+                                    self.event_source
+                                        .get_logic()
+                                        .unwrap()
+                                        .detection_state
+                                        .position
+                                        .1,
+                                ))
+                                .text_style(large_text.clone())
+                                .color(egui::Color32::from_gray(220)),
+                            );
+                        });
+                        ui.end_row();
+
+                        ui.label(
+                            egui::RichText::new("Velocity (measured):")
+                                .text_style(large_text.clone())
+                                .color(egui::Color32::from_gray(220)),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{:.0}, {:.0}",
+                                    self.event_source
+                                        .get_logic()
+                                        .unwrap()
+                                        .detection_state
+                                        .velocity
+                                        .0,
+                                    self.event_source
+                                        .get_logic()
+                                        .unwrap()
+                                        .detection_state
+                                        .velocity
+                                        .1,
+                                ))
+                                .text_style(large_text.clone())
+                                .color(egui::Color32::from_gray(220)),
+                            );
+                        });
+                        ui.end_row();
+
+                        ui.label(
+                            egui::RichText::new("Velocity/intended ratio:")
+                                .text_style(large_text.clone())
+                                .color(egui::Color32::from_gray(220)),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{}",
+                                    self.event_source.get_logic().unwrap().velocity_ratio
+                                ))
+                                .text_style(large_text.clone())
+                                .color(egui::Color32::from_gray(220)),
+                            );
+                        });
+                        ui.end_row();
+
+                        ui.label(
+                            egui::RichText::new("Angular correction flip:")
+                                .text_style(large_text.clone())
+                                .color(egui::Color32::from_gray(220)),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{}",
+                                    self.event_source
+                                        .get_logic()
+                                        .unwrap()
+                                        .angular_correction_flip
+                                ))
+                                .text_style(large_text.clone())
+                                .color(egui::Color32::from_gray(220)),
+                            );
+                        });
+                        ui.end_row();
+
+                        ui.label(
+                            egui::RichText::new("Angular correction:")
+                                .text_style(large_text.clone())
+                                .color(egui::Color32::from_gray(220)),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{}°",
+                                    ((self.event_source.get_logic().unwrap().angular_correction
+                                        + PI)
+                                        .rem_euclid(PI * 2.0)
+                                        - PI)
+                                        / PI
+                                        * 180.0
                                 ))
                                 .text_style(large_text.clone())
                                 .color(egui::Color32::from_gray(220)),

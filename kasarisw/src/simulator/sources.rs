@@ -1,3 +1,4 @@
+// sources.rs
 use crate::events::{get_ts, parse_event};
 use crate::physics::{Rect, Robot, World};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
@@ -288,7 +289,6 @@ pub struct SimEventSource {
     last_lidar_ts: u64,
     lidar_distance_offset: f32,
     debug: bool,
-    robot_flipped: bool,
     accelerometer_event_count: u64,
     rng: StdRng,
 }
@@ -301,7 +301,7 @@ impl SimEventSource {
         arena_height: f32,
         no_object: bool,
         reverse_rotation: bool,
-        robot_flipped: bool,
+        _robot_flipped: bool,
     ) -> Self {
         let channel = &*CHANNEL.init(PubSubChannel::new());
         let mut source = Self {
@@ -344,7 +344,6 @@ impl SimEventSource {
             last_lidar_ts: 0,
             lidar_distance_offset,
             debug,
-            robot_flipped,
             accelerometer_event_count: 0,
             rng: StdRng::seed_from_u64(42),
         };
@@ -423,15 +422,11 @@ impl SimEventSource {
             if next_accel <= next_ts {
                 let omega = (self.robot.rpm / 60.0 * 2.0 * PI).abs();
                 let a_g = (omega * omega * 0.0145) / 9.81;
-                let ay = a_g;
-                // Simulate gravity plus noise. Allow calibration to upright
-                // position during first 10 samples
+                // Allow calibration during the first 50 samples
+                let ay = if next_ts <= 500_000 { 0.0 } else { a_g };
+                // Simulate gravity plus noise
                 let range = Uniform::from(-4.0..4.0);
-                let az = if self.robot_flipped && self.accelerometer_event_count > 50 {
-                    -1.0
-                } else {
-                    1.0
-                } + self.rng.sample(&range);
+                let az = 1.0 + self.rng.sample(&range);
                 let event = InputEvent::Accelerometer(next_accel, ay, az);
                 self.event_buffer.push_back(event.clone());
                 self.control_logic.feed_event(event);
@@ -477,7 +472,7 @@ impl SimEventSource {
                             *ts,
                             self.control_logic.detector.theta,
                             plan.clone(),
-                            self.control_logic.detector.flip_detector.is_flipped(),
+                            self.control_logic.angular_correction,
                         );
                     }
                 }
@@ -510,9 +505,7 @@ impl EventSource for SimEventSource {
         Some(&self.control_logic)
     }
     fn get_robot_flipped(&self) -> bool {
-        self.robot_flipped
+        false
     }
-    fn set_robot_flipped(&mut self, robot_flipped: bool) {
-        self.robot_flipped = robot_flipped
-    }
+    fn set_robot_flipped(&mut self, _robot_flipped: bool) {}
 }

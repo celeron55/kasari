@@ -498,16 +498,16 @@ async fn main(spawner: Spawner) {
                     embassy_time::Instant::now().as_ticks(),
                     logic.detector.theta,
                     plan.clone(),
-                    logic.detector.flip_detector.is_flipped(),
+                    logic.angular_correction,
                 );
             } else {
                 modulator.mcp = None;
             }
         });
 
-        // This allows checking that the accerometer has been calibrated when
+        // This allows checking that the accelerometer has been calibrated when
         // the robot is idling
-        if libm::fabsf(logic.detector.rpm) < 100.0 && !logic.detector.flip_detector.is_flipped() {
+        if libm::fabsf(logic.detector.rpm) < 100.0 {
             led_pin.set_high();
         } else {
             led_pin.set_low();

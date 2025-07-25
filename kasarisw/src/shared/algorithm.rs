@@ -1,7 +1,6 @@
-// algorithm.rs
+// shared/algorithm.rs
 #![no_std]
 
-use crate::shared::flip_detector::FlipDetector;
 use crate::shared::rem_euclid_f32;
 use arrayvec::ArrayVec;
 use core::f32::consts::PI;
@@ -58,10 +57,9 @@ pub struct ObjectDetector {
     pos_y: f32,
     last_pos_x: f32,
     last_pos_y: f32,
-    last_pos_ts: Option<u64>,
+    pub last_pos_ts: Option<u64>,
     velocity: (f32, f32),
     prev_best_k: Option<usize>,
-    pub flip_detector: FlipDetector,
 }
 
 impl ObjectDetector {
@@ -87,7 +85,6 @@ impl ObjectDetector {
             last_pos_ts: None,
             velocity: (0.0, 0.0),
             prev_best_k: None,
-            flip_detector: FlipDetector::new(),
         }
     }
 
@@ -108,9 +105,8 @@ impl ObjectDetector {
         // other and we only care about synchronizing to the lidar in order to
         // maintain angle accuracy, as angles are derived from timestamps.
         match event {
-            Accelerometer(_, ay, az) => {
+            Accelerometer(_, ay, _) => {
                 let raw_accel_y = *ay;
-                let raw_accel_z = az.clamp(-8.0, 8.0); // Clip to ±8g
                 self.smoothed_accel_y = 0.2 * raw_accel_y + 0.8 * self.smoothed_accel_y;
 
                 // Calibrate Y
@@ -130,8 +126,6 @@ impl ObjectDetector {
                 if self.calibration_done {
                     self.rpm = self.accel_to_rpm(self.smoothed_accel_y);
                 }
-
-                self.flip_detector.update(raw_accel_y, raw_accel_z);
 
                 return;
             }
@@ -762,18 +756,27 @@ impl ObjectDetector {
                     self.arena_h = 0.9 * self.arena_h + 0.1 * best_temp_h;
                 }
 
-                // Update position
-                self.pos_x = best_temp_x;
-                self.pos_y = best_temp_y;
+                // Smooth position
+                let new_pos_x = best_temp_x;
+                let new_pos_y = best_temp_y;
+                let alpha_pos = 0.5;
+                if self.last_pos_ts.is_some() {
+                    self.pos_x = alpha_pos * self.pos_x + (1.0 - alpha_pos) * new_pos_x;
+                    self.pos_y = alpha_pos * self.pos_y + (1.0 - alpha_pos) * new_pos_y;
+                } else {
+                    self.pos_x = new_pos_x;
+                    self.pos_y = new_pos_y;
+                }
 
                 // Velocity
                 if let Some(last_ts) = self.last_pos_ts {
                     let dt = (self.last_ts.unwrap() - last_ts) as f32 / 1_000_000.0;
                     if dt > 0.01 {
-                        self.velocity = (
-                            (self.pos_x - self.last_pos_x) / dt,
-                            (self.pos_y - self.last_pos_y) / dt,
-                        );
+                        let new_vel_x = (self.pos_x - self.last_pos_x) / dt;
+                        let new_vel_y = (self.pos_y - self.last_pos_y) / dt;
+                        let beta_vel = 0.5;
+                        self.velocity.0 = beta_vel * self.velocity.0 + (1.0 - beta_vel) * new_vel_x;
+                        self.velocity.1 = beta_vel * self.velocity.1 + (1.0 - beta_vel) * new_vel_y;
                     }
                 }
                 self.last_pos_x = self.pos_x;

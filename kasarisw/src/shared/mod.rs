@@ -1,4 +1,4 @@
-// mod.rs
+// shared/mod.rs
 #![cfg_attr(target_os = "none", no_std)]
 use core::cell::RefCell;
 use critical_section::Mutex;
@@ -15,7 +15,6 @@ use embassy_time::Instant;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub mod algorithm;
-pub mod flip_detector;
 use algorithm::{DetectionResult, ObjectDetector};
 
 pub const TARGET_RPM: f32 = 1000.0;
@@ -80,8 +79,9 @@ pub mod kasari {
     #[cfg(target_os = "none")]
     use esp_println::println;
     use libm::{atan2f, cosf, fabsf, sqrtf};
+    use num_traits::float::FloatCore;
     #[cfg(not(target_os = "none"))]
-    use std::vec::Vec;
+    use std::vec::Vec; // powi on esp32
 
     #[derive(Clone, Debug)]
     pub enum InputEvent {
@@ -159,7 +159,7 @@ pub mod kasari {
         }
     }
 
-    /// Struct for control targets to make state clearer.
+    /// Struct for holding control targets to make state clearer.
     #[derive(Clone, Copy)]
     pub struct ControlTargets {
         pub rotation_speed: f32,
@@ -203,6 +203,10 @@ pub mod kasari {
         stats_step_sum_us: u64,
         stats_step_min_us: u64,
         stats_step_max_us: u64,
+        pub velocity_ratio: f32,
+        pub angular_correction: f32,
+        pub angular_correction_flip: bool,
+        angular_correction_flip_ts: u64,
     }
 
     impl MainLogic {
@@ -233,6 +237,10 @@ pub mod kasari {
                 stats_step_sum_us: 0,
                 stats_step_min_us: 0,
                 stats_step_max_us: 0,
+                velocity_ratio: 1.0,
+                angular_correction: 0.0,
+                angular_correction_flip: false,
+                angular_correction_flip_ts: 0,
             }
         }
 
@@ -577,6 +585,56 @@ pub mod kasari {
                     self.update_autonomous_targets(timestamp);
                 }
 
+                let velocity_recent =
+                    (timestamp - self.detector.last_pos_ts.unwrap_or(0)) < 100_000;
+                if velocity_recent {
+                    let intended_mag =
+                        sqrtf(self.target.movement_x.powi(2) + self.target.movement_y.powi(2));
+                    let vel_mag = sqrtf(
+                        self.detection_state.velocity.0.powi(2)
+                            + self.detection_state.velocity.1.powi(2),
+                    );
+                    if intended_mag > 0.3 {
+                        let velocity_ratio_unfiltered = vel_mag / intended_mag;
+                        self.velocity_ratio =
+                            self.velocity_ratio * 0.9 + velocity_ratio_unfiltered * 0.1;
+                    }
+                    println!(
+                        "intended_mag: {}, vel_mag: {}, velocity_ratio: {}",
+                        intended_mag, vel_mag, self.velocity_ratio
+                    );
+
+                    // Flip angular correction 180° if robot seems stuck to a wall
+                    if (self.detection_state.wall_distances.0 < 200.0
+                        || self.detection_state.wall_distances.1 < 200.0
+                        || self.detection_state.wall_distances.2 < 200.0
+                        || self.detection_state.wall_distances.3 < 200.0)
+                        && intended_mag > 0.3
+                        && self.velocity_ratio < 150.0
+                        && timestamp - self.angular_correction_flip_ts > 3_000_000
+                    {
+                        self.angular_correction_flip_ts = timestamp;
+                        self.angular_correction_flip = !self.angular_correction_flip;
+                        println!("angular_correction_flip: {}", self.angular_correction_flip);
+                    }
+                }
+
+                let intended_angle = atan2f(self.target.movement_y, self.target.movement_x);
+                let vel_angle = atan2f(
+                    self.detection_state.velocity.1,
+                    self.detection_state.velocity.0,
+                );
+                let mut delta = vel_angle - intended_angle
+                    + if self.angular_correction_flip {
+                        PI
+                    } else {
+                        0.0
+                    };
+                delta = rem_euclid_f32(delta + PI, 2.0 * PI) - PI;
+                const GAIN: f32 = 0.05;
+                self.angular_correction =
+                    rem_euclid_f32(self.angular_correction + delta * GAIN, 2.0 * PI);
+
                 let plan = MotorControlPlan {
                     timestamp: timestamp,
                     rotation_speed: self.current_rotation_speed,
@@ -726,7 +784,7 @@ pub mod kasari {
         theta: f32,
         rpm: f32,
         pub mcp: Option<MotorControlPlan>,
-        flipped: bool,
+        angular_correction: f32,
     }
 
     impl MotorModulator {
@@ -736,15 +794,21 @@ pub mod kasari {
                 theta: 0.0,
                 rpm: 0.0,
                 mcp: None,
-                flipped: false,
+                angular_correction: 0.0,
             }
         }
 
-        pub fn sync(&mut self, ts: u64, theta: f32, plan: MotorControlPlan, flipped: bool) {
+        pub fn sync(
+            &mut self,
+            ts: u64,
+            theta: f32,
+            plan: MotorControlPlan,
+            angular_correction: f32,
+        ) {
             self.last_ts = ts;
             self.theta = theta;
             self.mcp = Some(plan);
-            self.flipped = flipped;
+            self.angular_correction = angular_correction;
         }
 
         pub fn step(&mut self, ts: u64) -> (f32, f32) {
@@ -774,12 +838,9 @@ pub mod kasari {
                 return (base_rpm, base_rpm);
             }
 
-            let phase = atan2f(target_movement_y, target_movement_x);
+            let phase = atan2f(target_movement_y, target_movement_x) + self.angular_correction;
 
-            let mod_half = MODULATION_AMPLITUDE
-                * mag
-                * cosf(self.theta - phase)
-                * if self.flipped { -1.0 } else { 1.0 };
+            let mod_half = MODULATION_AMPLITUDE * mag * cosf(self.theta - phase);
 
             let left_rpm = base_rpm - mod_half;
             let right_rpm = base_rpm + mod_half;
