@@ -536,7 +536,7 @@ impl ObjectDetector {
             let mut wall_dists = [0.0f32; 4]; // 0: right (+x), 1: top (+y), 2: left (-x), 3: bottom (-y)
 
             for dir in 0..4 {
-                let mut max_proj = 0.0f32;
+                let mut projs: ArrayVec<f32, 32> = ArrayVec::new(); // 32 enough, since ~22
 
                 for i in 0..NUM_BINS {
                     let angle = i as f32 * BIN_ANGLE_STEP;
@@ -548,9 +548,21 @@ impl ObjectDetector {
                     if !d.is_finite() {
                         continue;
                     }
-                    let proj = d * proj_funcs[dir](angle);
-                    if proj > max_proj {
-                        max_proj = proj;
+                    let proj = d * (proj_funcs[dir])(angle);
+                    projs.push(proj);
+                }
+
+                let mut max_proj = 0.0;
+
+                if !projs.is_empty() {
+                    projs.sort_unstable_by(|a, b| {
+                        b.partial_cmp(a).unwrap_or(core::cmp::Ordering::Equal)
+                    });
+                    let ignore = 8;
+                    if projs.len() > ignore {
+                        max_proj = projs[ignore];
+                    } else {
+                        max_proj = projs[0]; // take the largest if not enough to ignore
                     }
                 }
 
