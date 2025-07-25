@@ -440,19 +440,38 @@ impl SimEventSource {
             }
 
             if next_lidar <= next_ts {
+                let distance_noise = if self.rng.sample(&Uniform::from(0.0..1.0)) > 0.9 {
+                    if self.rng.sample(&Uniform::from(0.0..1.0)) > 0.9 {
+                        self.rng.sample(&Uniform::from(-500.0..500.0))
+                    } else {
+                        self.rng.sample(&Uniform::from(-50.0..50.0))
+                    }
+                } else {
+                    0.0
+                };
+                let angle_noise = if self.rng.sample(&Uniform::from(0.0..1.0)) > 0.9 {
+                    if self.rng.sample(&Uniform::from(0.0..1.0)) > 0.9 {
+                        self.rng.sample(&Uniform::from(-0.5*PI..0.5*PI))
+                    } else {
+                        self.rng.sample(&Uniform::from(-0.05*PI..0.05*PI))
+                    }
+                } else {
+                    0.0
+                };
                 let delta_t_sec = (next_lidar - self.last_lidar_ts) as f32 / 1_000_000.0;
                 let delta_theta = self.robot.rpm / 60.0 * 2.0 * PI * delta_t_sec;
                 let step_theta = delta_theta / 4.0;
                 let mut distances = [0.0; 4];
                 for i in 0..4 {
                     let angle =
-                        rem_euclid_f32(self.robot.theta - ((3 - i) as f32 * step_theta), 2.0 * PI);
+                        rem_euclid_f32(self.robot.theta - ((3 - i) as f32 * step_theta), 2.0 * PI) + angle_noise;
                     let dir_x = angle.cos();
                     let dir_y = angle.sin();
                     let true_dist =
                         self.world
                             .raycast(self.robot.pos_x, self.robot.pos_y, dir_x, dir_y);
                     distances[i] = (true_dist - self.lidar_distance_offset).max(0.0);
+                    distances[i] += distance_noise;
                 }
                 let event = InputEvent::Lidar(
                     next_lidar,

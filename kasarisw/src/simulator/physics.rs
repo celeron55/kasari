@@ -126,15 +126,26 @@ impl Robot {
 
         let cos_off = cosf(target_movement_angle_offset);
         let sin_off = sinf(target_movement_angle_offset);
-        let rotated_x = movement_x * cos_off - movement_y * sin_off;
-        let rotated_y = movement_x * sin_off + movement_y * cos_off;
+        let mut rotated_x = movement_x * cos_off - movement_y * sin_off;
+        let mut rotated_y = movement_x * sin_off + movement_y * cos_off;
+        // Mimick the position control deadzone of the real robot
+        if rotated_x.abs() < 0.10 {
+            rotated_x = 0.0;
+        } else {
+            rotated_x -= rotated_x.signum() * 0.10;
+        }
+        if rotated_y.abs() < 0.10 {
+            rotated_y = 0.0;
+        } else {
+            rotated_y -= rotated_y.signum() * 0.10;
+        }
 
-        let accel_const = 1000.0; // mm/s² per unit mag
-        let drag_const = 1.5;
-        let accel_x = accel_const * rotated_x;
-        let accel_y = accel_const * rotated_y;
-        self.vel_x += (accel_x - self.vel_x * drag_const) * dt;
-        self.vel_y += (accel_y - self.vel_y * drag_const) * dt;
+        const ACCEL_CONST: f32 = 500.0; // mm/s² per unit mag
+        const DRAG_CONST: f32 = 0.2;
+        let accel_x = ACCEL_CONST * rotated_x;
+        let accel_y = ACCEL_CONST * rotated_y;
+        self.vel_x += (accel_x - self.vel_x * DRAG_CONST) * dt;
+        self.vel_y += (accel_y - self.vel_y * DRAG_CONST) * dt;
 
         // Limit velocity to keep the collision checks working with the fixed
         // time step
