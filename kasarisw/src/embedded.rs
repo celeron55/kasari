@@ -63,7 +63,7 @@ const PASSWORD: &str = env!("PASSWORD");
 
 const PWM_HZ: f32 = 400.0;
 
-const RPM_PER_THROTTLE_PERCENT: f32 = 30.0;
+const RPM_PER_THROTTLE_PERCENT: f32 = 40.0;
 
 const MOTOR_UPDATE_HZ: f32 = 200.0;
 
