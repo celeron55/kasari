@@ -437,7 +437,7 @@ impl eframe::App for MyApp {
                         ui.end_row();
 
                         ui.label(
-                            egui::RichText::new("Sim: Measured RPM:")
+                            egui::RichText::new("Mirror: Measured RPM:")
                                 .text_style(large_text.clone())
                                 .color(egui::Color32::from_gray(220)),
                         );
@@ -454,7 +454,7 @@ impl eframe::App for MyApp {
                         ui.end_row();
 
                         ui.label(
-                            egui::RichText::new("Sim: Flipped:")
+                            egui::RichText::new("Mirror: Flipped:")
                                 .text_style(large_text.clone())
                                 .color(egui::Color32::from_gray(220)),
                         );
@@ -471,7 +471,7 @@ impl eframe::App for MyApp {
                         ui.end_row();
 
                         ui.label(
-                            egui::RichText::new("Sim: Wall distances:")
+                            egui::RichText::new("Mirror: Wall distances:")
                                 .text_style(large_text.clone())
                                 .color(egui::Color32::from_gray(220)),
                         );
@@ -511,7 +511,7 @@ impl eframe::App for MyApp {
                         ui.end_row();
 
                         ui.label(
-                            egui::RichText::new("Sim: Position:")
+                            egui::RichText::new("Mirror: Position:")
                                 .text_style(large_text.clone())
                                 .color(egui::Color32::from_gray(220)),
                         );
@@ -539,7 +539,7 @@ impl eframe::App for MyApp {
                         ui.end_row();
 
                         ui.label(
-                            egui::RichText::new("Sim: Velocity:")
+                            egui::RichText::new("Mirror: Velocity:")
                                 .text_style(large_text.clone())
                                 .color(egui::Color32::from_gray(220)),
                         );
@@ -567,7 +567,7 @@ impl eframe::App for MyApp {
                         ui.end_row();
 
                         ui.label(
-                            egui::RichText::new("Sim: Intended movement age:")
+                            egui::RichText::new("Mirror: No intended movement age:")
                                 .text_style(large_text.clone())
                                 .color(egui::Color32::from_gray(220)),
                         );
@@ -576,11 +576,12 @@ impl eframe::App for MyApp {
                                 egui::RichText::new(format!(
                                     "{:.3} s",
                                     self.virtual_elapsed
-                                        - self
+                                        - (self
                                             .event_source
                                             .get_logic()
                                             .unwrap()
-                                            .intended_movement_velocity_timestamp
+                                            .no_intended_movement_timestamp as i64
+                                            - self.first_ts as i64)
                                             as f64
                                             / 1_000_000.0
                                 ))
@@ -591,7 +592,7 @@ impl eframe::App for MyApp {
                         ui.end_row();
 
                         ui.label(
-                            egui::RichText::new("Sim: Away from wall age:")
+                            egui::RichText::new("Mirror: Intended movement age:")
                                 .text_style(large_text.clone())
                                 .color(egui::Color32::from_gray(220)),
                         );
@@ -600,11 +601,12 @@ impl eframe::App for MyApp {
                                 egui::RichText::new(format!(
                                     "{:.3} s",
                                     self.virtual_elapsed
-                                        - self
+                                        - (self
                                             .event_source
                                             .get_logic()
                                             .unwrap()
-                                            .away_from_wall_timestamp
+                                            .intended_movement_velocity_timestamp as i64
+                                            - self.first_ts as i64)
                                             as f64
                                             / 1_000_000.0
                                 ))
@@ -615,7 +617,32 @@ impl eframe::App for MyApp {
                         ui.end_row();
 
                         ui.label(
-                            egui::RichText::new("Sim: Angular correction flip:")
+                            egui::RichText::new("Mirror: Away from wall age:")
+                                .text_style(large_text.clone())
+                                .color(egui::Color32::from_gray(220)),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{:.3} s",
+                                    self.virtual_elapsed
+                                        - (self
+                                            .event_source
+                                            .get_logic()
+                                            .unwrap()
+                                            .away_from_wall_timestamp as i64
+                                            - self.first_ts as i64)
+                                            as f64
+                                            / 1_000_000.0
+                                ))
+                                .text_style(large_text.clone())
+                                .color(egui::Color32::from_gray(220)),
+                            );
+                        });
+                        ui.end_row();
+
+                        ui.label(
+                            egui::RichText::new("Mirror: Angular correction flip:")
                                 .text_style(large_text.clone())
                                 .color(egui::Color32::from_gray(220)),
                         );
@@ -635,7 +662,7 @@ impl eframe::App for MyApp {
                         ui.end_row();
 
                         ui.label(
-                            egui::RichText::new("Sim: Angular correction:")
+                            egui::RichText::new("Mirror: Angular correction:")
                                 .text_style(large_text.clone())
                                 .color(egui::Color32::from_gray(220)),
                         );

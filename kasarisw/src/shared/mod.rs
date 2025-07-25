@@ -209,6 +209,7 @@ pub mod kasari {
         pub angular_correction_flip: bool,
         angular_correction_flip_ts: u64,
         pub angular_correction_total: f32,
+        pub no_intended_movement_timestamp: u64,
         pub intended_movement_velocity_timestamp: u64,
         pub away_from_wall_timestamp: u64,
     }
@@ -244,6 +245,7 @@ pub mod kasari {
                 angular_correction_flip: false,
                 angular_correction_flip_ts: 0,
                 angular_correction_total: 0.0,
+                no_intended_movement_timestamp: 0,
                 intended_movement_velocity_timestamp: 0,
                 away_from_wall_timestamp: 0,
             }
@@ -600,10 +602,14 @@ pub mod kasari {
                 // movement with measured velocity
                 let dot = self.detection_state.velocity.0 * self.target.movement_x
                     + self.detection_state.velocity.1 * self.target.movement_y;
+                let intended_movement_mag =
+                    sqrtf(self.target.movement_x.powi(2) + self.target.movement_y.powi(2));
 
-                if sqrtf(dot)
-                    > 0.5 * sqrtf(self.target.movement_x.powi(2) + self.target.movement_y.powi(2))
-                {
+                if intended_movement_mag < 0.3 || self.detector.rpm.abs() < MIN_MOVE_RPM {
+                    self.no_intended_movement_timestamp = timestamp;
+                }
+
+                if sqrtf(dot) > 0.5 * intended_movement_mag {
                     self.intended_movement_velocity_timestamp = timestamp;
                 }
 
@@ -618,6 +624,8 @@ pub mod kasari {
                 // Flip angular correction 180° if robot moves to the wrong
                 // direction or seems stuck to a wall (i.e. it might be flipped)
                 if timestamp - self.angular_correction_flip_ts > 6_000_000
+                    && self.detector.rpm.abs() > MIN_MOVE_RPM
+                    && timestamp - self.no_intended_movement_timestamp > 1_000_000
                     && (timestamp - self.intended_movement_velocity_timestamp > 2_000_000
                         || timestamp - self.away_from_wall_timestamp > 3_000_000)
                 {
