@@ -17,12 +17,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub mod algorithm;
 use algorithm::{DetectionResult, ObjectDetector};
 
-pub const TARGET_RPM: f32 = 1000.0;
+pub const TARGET_RPM: f32 = 1200.0;
 pub const MIN_MOVE_RPM: f32 = 550.0;
 pub const MIN_ATTACK_RPM: f32 = 800.0;
 
-pub const MOVEMENT_SPEED_CENTER: f32 = 1.0;
-pub const MOVEMENT_SPEED_ATTACK: f32 = 1.0;
+pub const MOVEMENT_SPEED_CENTER: f32 = 1.3;
+pub const MOVEMENT_SPEED_ATTACK: f32 = 1.3;
 
 pub const MAX_RPM_RAMP_RATE: f32 = 2000.0; // rpm/s
 pub const RPM_INITIAL_JUMP: f32 = 500.0; // rpm
@@ -233,7 +233,7 @@ pub mod kasari {
                 autonomous_enabled: false,
                 autonomous_start_ts: None,
                 autonomous_cycle_period_us: 8_000_000, // 8 seconds
-                autonomous_duty_cycle: 0.75,           // 75% towards center, 25% towards object
+                autonomous_duty_cycle: 0.70,           // 70% towards center, 30% towards object
                 last_rpm_update_ts: None,
                 current_rotation_speed: 0.0,
                 target: ControlTargets::default(),
