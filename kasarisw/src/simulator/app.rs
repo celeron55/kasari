@@ -649,7 +649,11 @@ impl eframe::App for MyApp {
                             ui.label(
                                 egui::RichText::new(format!(
                                     "{}°",
-                                    ((self.event_source.get_logic().unwrap().angular_correction_total
+                                    ((self
+                                        .event_source
+                                        .get_logic()
+                                        .unwrap()
+                                        .angular_correction_total
                                         + PI)
                                         .rem_euclid(PI * 2.0)
                                         - PI)
