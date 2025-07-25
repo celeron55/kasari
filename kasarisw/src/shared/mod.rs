@@ -493,8 +493,21 @@ pub mod kasari {
                 };
 
                 // Cancel unwanted velocity
-                // NOTE: This doesn't work properly so it is commented out
-                /*let vel_x = self.detection_state.velocity.0;
+                let v_factor = 10.0;
+                let velocity_diff_x = intended_x * v_factor - self.detection_state.velocity.0;
+                let velocity_diff_y = intended_y * v_factor - self.detection_state.velocity.1;
+                let gain = 0.3;
+                let max = 0.7;
+                let adjust_x = (velocity_diff_x * gain).max(-max).min(max);
+                let adjust_y = (velocity_diff_y * gain).max(-max).min(max);
+                println!(
+                    "velocity_diff: {:.0}, {:.0}, adjust: {:.2}, {:.2}",
+                    velocity_diff_x, velocity_diff_y, adjust_x, adjust_y,
+                );
+                (intended_x + adjust_x, intended_y + adjust_y)
+
+                /*// NOTE: This doesn't work properly so it is commented out
+                let vel_x = self.detection_state.velocity.0;
                 let vel_y = self.detection_state.velocity.1;
                 let vel_mag = sqrtf(vel_x * vel_x + vel_y * vel_y);
                 if vel_mag > 0.0 {
@@ -512,8 +525,9 @@ pub mod kasari {
                     } else {
                         (0.0, 0.0)
                     }
-                } else*/
-                (intended_x, intended_y)
+                } else {
+                    (intended_x, intended_y)
+                }*/
             }
         }
 
