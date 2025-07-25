@@ -209,9 +209,11 @@ pub mod kasari {
         pub angular_correction_flip: bool,
         angular_correction_flip_ts: u64,
         pub angular_correction_total: f32,
+        pub intended_movement_comparison: f32,
         pub no_intended_movement_timestamp: u64,
         pub intended_movement_velocity_timestamp: u64,
         pub away_from_wall_timestamp: u64,
+        pub close_to_wall_timestamp: u64,
     }
 
     impl MainLogic {
@@ -231,7 +233,7 @@ pub mod kasari {
                 autonomous_enabled: false,
                 autonomous_start_ts: None,
                 autonomous_cycle_period_us: 8_000_000, // 8 seconds
-                autonomous_duty_cycle: 0.75,          // 75% towards center, 25% towards object
+                autonomous_duty_cycle: 0.75,           // 75% towards center, 25% towards object
                 last_rpm_update_ts: None,
                 current_rotation_speed: 0.0,
                 target: ControlTargets::default(),
@@ -245,9 +247,11 @@ pub mod kasari {
                 angular_correction_flip: false,
                 angular_correction_flip_ts: 0,
                 angular_correction_total: 0.0,
+                intended_movement_comparison: 0.0,
                 no_intended_movement_timestamp: 0,
                 intended_movement_velocity_timestamp: 0,
                 away_from_wall_timestamp: 0,
+                close_to_wall_timestamp: 0,
             }
         }
 
@@ -390,7 +394,9 @@ pub mod kasari {
                 let target_x = (away_x + self.detection_state.open_space.0) / 2.0;
                 let target_y = (away_y + self.detection_state.open_space.1) / 2.0;
                 let target_len = sqrtf(target_x * target_x + target_y * target_y);
-                let throttle = ((target_len - 50.0 - (wall_dist - 300.0)) / 200.0).max(0.1).min(1.0);
+                let throttle = ((target_len - 50.0 + (wall_dist - 300.0)) / 200.0)
+                    .max(0.1)
+                    .min(1.0);
                 if target_len > 0.0 {
                     (
                         target_x / target_len * MOVEMENT_SPEED_CENTER * throttle,
@@ -458,11 +464,15 @@ pub mod kasari {
                         let k = 0.5; // Bias factor
                         let blended_x = center_x + k * norm_perp_x * center_len;
                         let blended_y = center_y + k * norm_perp_y * center_len;
-                        let throttle = ((center_len - 50.0 - (wall_dist - 300.0)) / 200.0).max(0.1).min(1.0);
+                        let throttle = ((center_len - 50.0 + (wall_dist - 300.0)) / 200.0)
+                            .max(0.1)
+                            .min(1.0);
                         (blended_x, blended_y, MOVEMENT_SPEED_CENTER * throttle)
                     } else {
                         // Not aligned, use center directly
-                        let throttle = ((center_len - 50.0 - (wall_dist - 300.0)) / 200.0).max(0.1).min(1.0);
+                        let throttle = ((center_len - 50.0 + (wall_dist - 300.0)) / 200.0)
+                            .max(0.1)
+                            .min(1.0);
                         (center_x, center_y, MOVEMENT_SPEED_CENTER * throttle)
                     }
                 } else {
@@ -598,27 +608,37 @@ pub mod kasari {
                     self.update_autonomous_targets(timestamp);
                 }
 
-                // Try to detect if the robot is flipped by comparing intended
-                // movement with measured velocity
-                let dot = self.detection_state.velocity.0 * self.target.movement_x
-                    + self.detection_state.velocity.1 * self.target.movement_y;
+                // Flip detection
+
                 let intended_movement_mag =
                     sqrtf(self.target.movement_x.powi(2) + self.target.movement_y.powi(2));
 
-                if intended_movement_mag < 0.3 || self.detector.rpm.abs() < MIN_MOVE_RPM {
+                if intended_movement_mag < 0.05 || self.detector.rpm.abs() < MIN_MOVE_RPM {
                     self.no_intended_movement_timestamp = timestamp;
                 }
 
-                if sqrtf(dot) > 0.5 * intended_movement_mag {
+                // Compare intended movement with measured velocity using dot
+                // product
+                let dot = self.detection_state.velocity.0 * self.target.movement_x
+                    + self.detection_state.velocity.1 * self.target.movement_y;
+                self.intended_movement_comparison = if intended_movement_mag > 0.01 {
+                    sqrtf(dot) / intended_movement_mag
+                } else {
+                    -f32::INFINITY
+                };
+                if self.intended_movement_comparison > 0.5 {
                     self.intended_movement_velocity_timestamp = timestamp;
                 }
 
-                if (self.detection_state.wall_distances.0 > 220.0
-                    && self.detection_state.wall_distances.1 > 220.0
-                    && self.detection_state.wall_distances.2 > 220.0
-                    && self.detection_state.wall_distances.3 > 220.0)
+                const D: f32 = 250.0;
+                if (self.detection_state.wall_distances.0 > D
+                    && self.detection_state.wall_distances.1 > D
+                    && self.detection_state.wall_distances.2 > D
+                    && self.detection_state.wall_distances.3 > D)
                 {
                     self.away_from_wall_timestamp = timestamp;
+                } else {
+                    self.close_to_wall_timestamp = timestamp;
                 }
 
                 // Flip angular correction 180° if robot moves to the wrong
@@ -626,7 +646,8 @@ pub mod kasari {
                 if timestamp - self.angular_correction_flip_ts > 6_000_000
                     && self.detector.rpm.abs() > MIN_MOVE_RPM
                     && timestamp - self.no_intended_movement_timestamp > 1_000_000
-                    && (timestamp - self.intended_movement_velocity_timestamp > 2_000_000
+                    && ((timestamp - self.intended_movement_velocity_timestamp > 1_500_000
+                        && timestamp - self.away_from_wall_timestamp > 1_000_000)
                         || timestamp - self.away_from_wall_timestamp > 3_000_000)
                 {
                     self.angular_correction_flip_ts = timestamp;

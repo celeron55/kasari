@@ -567,6 +567,26 @@ impl eframe::App for MyApp {
                         ui.end_row();
 
                         ui.label(
+                            egui::RichText::new("Mirror: Intended movement comparison:")
+                                .text_style(large_text.clone())
+                                .color(egui::Color32::from_gray(220)),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{:.1}",
+                                    self.event_source
+                                        .get_logic()
+                                        .unwrap()
+                                        .intended_movement_comparison
+                                ))
+                                .text_style(large_text.clone())
+                                .color(egui::Color32::from_gray(220)),
+                            );
+                        });
+                        ui.end_row();
+
+                        ui.label(
                             egui::RichText::new("Mirror: No intended movement age:")
                                 .text_style(large_text.clone())
                                 .color(egui::Color32::from_gray(220)),
@@ -580,7 +600,8 @@ impl eframe::App for MyApp {
                                             .event_source
                                             .get_logic()
                                             .unwrap()
-                                            .no_intended_movement_timestamp as i64
+                                            .no_intended_movement_timestamp
+                                            as i64
                                             - self.first_ts as i64)
                                             as f64
                                             / 1_000_000.0
@@ -605,7 +626,8 @@ impl eframe::App for MyApp {
                                             .event_source
                                             .get_logic()
                                             .unwrap()
-                                            .intended_movement_velocity_timestamp as i64
+                                            .intended_movement_velocity_timestamp
+                                            as i64
                                             - self.first_ts as i64)
                                             as f64
                                             / 1_000_000.0
@@ -630,7 +652,34 @@ impl eframe::App for MyApp {
                                             .event_source
                                             .get_logic()
                                             .unwrap()
-                                            .away_from_wall_timestamp as i64
+                                            .away_from_wall_timestamp
+                                            as i64
+                                            - self.first_ts as i64)
+                                            as f64
+                                            / 1_000_000.0
+                                ))
+                                .text_style(large_text.clone())
+                                .color(egui::Color32::from_gray(220)),
+                            );
+                        });
+                        ui.end_row();
+
+                        ui.label(
+                            egui::RichText::new("Mirror: Close to wall age:")
+                                .text_style(large_text.clone())
+                                .color(egui::Color32::from_gray(220)),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{:.3} s",
+                                    self.virtual_elapsed
+                                        - (self
+                                            .event_source
+                                            .get_logic()
+                                            .unwrap()
+                                            .close_to_wall_timestamp
+                                            as i64
                                             - self.first_ts as i64)
                                             as f64
                                             / 1_000_000.0
