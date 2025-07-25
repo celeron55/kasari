@@ -21,6 +21,9 @@ pub const TARGET_RPM: f32 = 1000.0;
 pub const MIN_MOVE_RPM: f32 = 550.0;
 pub const MIN_ATTACK_RPM: f32 = 800.0;
 
+pub const MOVEMENT_SPEED_CENTER: f32 = 0.7;
+pub const MOVEMENT_SPEED_ATTACK: f32 = 1.4;
+
 pub const MAX_RPM_RAMP_RATE: f32 = 2000.0; // rpm/s
 pub const RPM_INITIAL_JUMP: f32 = 500.0; // rpm
 
@@ -70,8 +73,8 @@ pub mod kasari {
     use crate::shared::ObjectDetector;
     use crate::shared::{
         get_current_timestamp, LOG_DETECTION, LOG_RECEIVER, LOG_VBAT, LOG_WIFI_CONTROL,
-        MAX_RPM_RAMP_RATE, MIN_ATTACK_RPM, MIN_MOVE_RPM, RECEIVER_MAX_GAP_US, RPM_INITIAL_JUMP,
-        TARGET_RPM,
+        MAX_RPM_RAMP_RATE, MIN_ATTACK_RPM, MIN_MOVE_RPM, MOVEMENT_SPEED_ATTACK,
+        MOVEMENT_SPEED_CENTER, RECEIVER_MAX_GAP_US, RPM_INITIAL_JUMP, TARGET_RPM,
     };
     #[cfg(target_os = "none")]
     use alloc::vec::Vec;
@@ -392,7 +395,10 @@ pub mod kasari {
                 let target_y = (away_y + self.detection_state.open_space.1) / 2.0;
                 let target_len = sqrtf(target_x * target_x + target_y * target_y);
                 if target_len > 0.0 {
-                    (target_x / target_len * 1.0, target_y / target_len * 1.0)
+                    (
+                        target_x / target_len * MOVEMENT_SPEED_CENTER,
+                        target_y / target_len * MOVEMENT_SPEED_CENTER,
+                    )
                 } else {
                     (0.0, 0.0)
                 }
@@ -455,14 +461,14 @@ pub mod kasari {
                         let k = 0.5; // Bias factor
                         let blended_x = center_x + k * norm_perp_x * center_len;
                         let blended_y = center_y + k * norm_perp_y * center_len;
-                        (blended_x, blended_y, 1.0)
+                        (blended_x, blended_y, MOVEMENT_SPEED_CENTER)
                     } else {
                         // Not aligned, use center directly
-                        (center_x, center_y, 1.0)
+                        (center_x, center_y, MOVEMENT_SPEED_CENTER)
                     }
                 } else {
                     // Towards object
-                    (obj_x, obj_y, 2.0)
+                    (obj_x, obj_y, MOVEMENT_SPEED_ATTACK)
                 };
                 let target_len = sqrtf(target_x * target_x + target_y * target_y);
                 let intended_speed = if target_len > 0.0 {
@@ -669,24 +675,6 @@ pub mod kasari {
                 }
 
                 self.last_intended_movement_angle = intended_angle;
-
-                let plan = MotorControlPlan {
-                    timestamp: timestamp,
-                    rotation_speed: self.current_rotation_speed,
-                    movement_x: self.target.movement_x,
-                    movement_y: self.target.movement_y,
-                };
-                if let Some(ref publisher) = publisher {
-                    publisher.publish_immediate(InputEvent::Planner(
-                        timestamp,
-                        plan,
-                        result.closest_wall,
-                        result.open_space,
-                        result.object_pos,
-                        self.detector.theta,
-                        self.detector.rpm,
-                    ));
-                }
             }
 
             self.control_rpm(timestamp);
@@ -701,6 +689,17 @@ pub mod kasari {
                     movement_y: self.target.movement_y,
                 };
                 self.motor_control_plan = Some(plan);
+                if let Some(ref publisher) = publisher {
+                    publisher.publish_immediate(InputEvent::Planner(
+                        timestamp,
+                        plan,
+                        self.detection_state.closest_wall,
+                        self.detection_state.open_space,
+                        self.detection_state.object_pos,
+                        self.detector.theta,
+                        self.detector.rpm,
+                    ));
+                }
             }
 
             let step_duration_us = get_current_timestamp() - step_start;
