@@ -598,10 +598,12 @@ pub mod kasari {
                     intended_angle - self.last_intended_movement_angle + PI,
                     2.0 * PI,
                 ) - PI;
+                let velocity_mag_sq = self.detection_state.velocity.0.powi(2)
+                    + self.detection_state.velocity.1.powi(2);
 
                 let velocity_recent =
                     (timestamp - self.detector.last_pos_ts.unwrap_or(0)) < 100_000;
-                if velocity_recent && self.intended_angle_change < 0.1 {
+                if velocity_recent && self.intended_angle_change.abs() < 0.1 {
                     self.velocity_ratio_integrator *= 0.9;
                     let intended_mag_sq =
                         self.target.movement_x.powi(2) + self.target.movement_y.powi(2);
@@ -621,8 +623,8 @@ pub mod kasari {
                         || self.detection_state.wall_distances.2 < 220.0
                         || self.detection_state.wall_distances.3 < 220.0)
                         && intended_mag_sq > 0.3.powi(2)
-                        && self.velocity_ratio_integrator < -5000.0
-                        && timestamp - self.angular_correction_flip_ts > 3_000_000
+                        && self.velocity_ratio_integrator < -100.0
+                        && timestamp - self.angular_correction_flip_ts > 6_000_000
                     {
                         self.angular_correction_flip_ts = timestamp;
                         self.angular_correction_flip = !self.angular_correction_flip;
@@ -639,17 +641,22 @@ pub mod kasari {
                         );
                     }
 
-                    let vel_angle = atan2f(
-                        self.detection_state.velocity.1,
-                        self.detection_state.velocity.0,
-                    );
-                    let mut delta = vel_angle - intended_angle;
-                    delta = rem_euclid_f32(delta + PI, 2.0 * PI) - PI;
-                    const GAIN: f32 = 0.1;
-                    self.angular_correction = rem_euclid_f32(
-                        self.angular_correction - delta * GAIN,
-                        2.0 * PI,
-                    );
+                    if velocity_mag_sq > 100.0.powi(2) {
+                        let vel_angle = atan2f(
+                            self.detection_state.velocity.1,
+                            self.detection_state.velocity.0,
+                        );
+                        let mut delta = vel_angle - intended_angle;
+                        println!(
+                            "intended_angle: {}, vel_angle: {}, delta: {}",
+                            vel_angle, intended_angle, delta
+                        );
+                        delta = rem_euclid_f32(delta + PI, 2.0 * PI) - PI;
+                        const GAIN: f32 = 0.05;
+                        self.angular_correction =
+                            rem_euclid_f32(self.angular_correction - delta * GAIN, 2.0 * PI);
+                    }
+
                     let flip_angle = if self.angular_correction_flip {
                         PI
                     } else {

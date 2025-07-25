@@ -379,14 +379,15 @@ impl SimEventSource {
             .control_logic
             .motor_control_plan
             .map_or(0.0, |p| p.movement_y);
-        let angular_correction_plus_flipped_state = if self.robot_flipped { PI } else { 0.0 };
+        let angular_correction_plus_flipped_state =
+            self.control_logic.angular_correction_total + if self.robot_flipped { PI } else { 0.0 };
         self.robot.update(
             dt,
             movement_x,
             movement_y,
             &self.world,
             self.control_logic.detector.theta,
-            self.control_logic.angular_correction_total + angular_correction_plus_flipped_state,
+            angular_correction_plus_flipped_state,
         );
     }
 

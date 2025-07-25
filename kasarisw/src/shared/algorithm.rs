@@ -564,9 +564,9 @@ impl ObjectDetector {
                 }
 
                 // Smooth position
-                let new_pos_x = d_left;
-                let new_pos_y = d_bottom;
-                let alpha_pos = 0.5;
+                let new_pos_x = d_left - temp_w / 2.0;
+                let new_pos_y = d_bottom - temp_h / 2.0;
+                let alpha_pos = 0.8;
                 if self.last_pos_ts.is_some() {
                     self.pos_x = alpha_pos * self.pos_x + (1.0 - alpha_pos) * new_pos_x;
                     self.pos_y = alpha_pos * self.pos_y + (1.0 - alpha_pos) * new_pos_y;
@@ -581,7 +581,7 @@ impl ObjectDetector {
                     if dt > 0.001 {
                         let new_vel_x = (self.pos_x - self.last_pos_x) / dt;
                         let new_vel_y = (self.pos_y - self.last_pos_y) / dt;
-                        let beta_vel = 0.5;
+                        let beta_vel = 0.8;
                         self.velocity.0 = beta_vel * self.velocity.0 + (1.0 - beta_vel) * new_vel_x;
                         self.velocity.1 = beta_vel * self.velocity.1 + (1.0 - beta_vel) * new_vel_y;
                     }
@@ -591,9 +591,7 @@ impl ObjectDetector {
                 self.last_pos_ts = self.last_ts;
 
                 // Open space to center
-                let center_x = self.arena_w / 2.0;
-                let center_y = self.arena_h / 2.0;
-                open_space = (center_x - self.pos_x, center_y - self.pos_y);
+                open_space = (-self.pos_x, -self.pos_y);
 
                 // Wall distances
                 wall_distances = (d_left, d_right, d_bottom, d_top);
