@@ -129,8 +129,8 @@ impl Robot {
         let rotated_x = movement_x * cos_off - movement_y * sin_off;
         let rotated_y = movement_x * sin_off + movement_y * cos_off;
 
-        let accel_const = 500.0; // mm/s² per unit mag
-        let drag_const = 3.0; // 3/s
+        let accel_const = 1000.0; // mm/s² per unit mag
+        let drag_const = 1.5;
         let accel_x = accel_const * rotated_x;
         let accel_y = accel_const * rotated_y;
         self.vel_x += (accel_x - self.vel_x * drag_const) * dt;
