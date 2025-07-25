@@ -227,13 +227,14 @@ def main():
     axs[2].set_title('Corrected AZ and Gravity Score')
 
     axs[3].plot(ts, flipped, label='flipped', color='black', drawstyle='steps-post', lw=2)
+    axs[3].plot(ts, corrected_az, label='corrected_az (used for flip)', color='purple', alpha=0.5)
     axs[3].axhline(args.flip_thresh, color='b', ls='--', label='flip_thresh')
     axs[3].axhline(args.flip_hyst_high, color='g', ls='--', label='hyst_high')
     axs[3].axhline(args.flip_low_thresh, color='r', ls='--', label='flip_low_thresh')
     axs[3].legend()
     axs[3].set_ylabel('Flipped (1/0)')
     axs[3].set_title('Detected Flipped Status')
-    axs[3].set_ylim(-0.1, 1.1)
+    axs[3].set_ylim(-1.0, 2.0)
 
     # Correlation slope over time (for debugging)
     slopes = np.full_like(ts, np.nan)
