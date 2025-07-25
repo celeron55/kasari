@@ -208,17 +208,31 @@ impl ObjectDetector {
                             if direction_forward {
                                 for k in 1..steps {
                                     let fill_idx = (prev_idx + k) % NUM_BINS;
-                                    self.bins_dist[fill_idx] = d;
+                                    if self.bins_dist[fill_idx] == f32::INFINITY {
+                                        self.bins_dist[fill_idx] = d;
+                                    } else {
+                                        self.bins_dist[fill_idx] =
+                                            (self.bins_dist[fill_idx] + d) / 2.0;
+                                    }
                                 }
                             } else {
                                 for k in 1..steps {
                                     let fill_idx = (prev_idx + NUM_BINS - k) % NUM_BINS;
-                                    self.bins_dist[fill_idx] = d;
+                                    if self.bins_dist[fill_idx] == f32::INFINITY {
+                                        self.bins_dist[fill_idx] = d;
+                                    } else {
+                                        self.bins_dist[fill_idx] =
+                                            (self.bins_dist[fill_idx] + d) / 2.0;
+                                    }
                                 }
                             }
                         }
                     }
-                    self.bins_dist[bin_idx] = d;
+                    if self.bins_dist[bin_idx] == f32::INFINITY {
+                        self.bins_dist[bin_idx] = d;
+                    } else {
+                        self.bins_dist[bin_idx] = (self.bins_dist[bin_idx] + d) / 2.0;
+                    }
                     self.last_bin_idx = Some(bin_idx);
                 }
             }
