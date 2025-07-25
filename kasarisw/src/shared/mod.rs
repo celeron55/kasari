@@ -464,15 +464,11 @@ pub mod kasari {
                         let k = 0.5; // Bias factor
                         let blended_x = center_x + k * norm_perp_x * center_len;
                         let blended_y = center_y + k * norm_perp_y * center_len;
-                        let throttle = ((center_len - 50.0) / 200.0)
-                            .max(0.1)
-                            .min(1.0);
+                        let throttle = ((center_len - 50.0) / 200.0).max(0.1).min(1.0);
                         (blended_x, blended_y, MOVEMENT_SPEED_CENTER * throttle)
                     } else {
                         // Not aligned, use center directly
-                        let throttle = ((center_len - 50.0) / 200.0)
-                            .max(0.1)
-                            .min(1.0);
+                        let throttle = ((center_len - 50.0) / 200.0).max(0.1).min(1.0);
                         (center_x, center_y, MOVEMENT_SPEED_CENTER * throttle)
                     }
                 } else {
