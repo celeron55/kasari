@@ -353,24 +353,24 @@ impl ObjectDetector {
 
             // Single
             for &(dist_diff, mut idx) in &large_changes {
-                if dist_diff < 80.0 {
+                if dist_diff < 130.0 {
                     continue;
                 }
                 let mut local_idx2 = (idx + 1) % n;
                 let mut local_idx1 = idx;
                 let mut local_depth = avgs[local_idx2] - avgs[local_idx1];
                 let mut local_is_flipped = false;
-                if local_depth < -80.0 {
+                if local_depth < -130.0 {
                     local_depth = -local_depth;
                     local_is_flipped = true;
                     core::mem::swap(&mut local_idx1, &mut local_idx2);
-                } else if local_depth < 80.0 {
+                } else if local_depth < 130.0 {
                     continue;
                 }
                 let avg_middle_dist = avgs[local_idx1];
                 let union_len = wall_window_size as f32;
                 let score = local_depth * union_len.min(3.0);
-                if local_depth > 80.0 && 120.0 <= avg_middle_dist && avg_middle_dist <= 1200.0 {
+                if local_depth > 130.0 && 120.0 <= avg_middle_dist && avg_middle_dist <= 1200.0 {
                     if score > best_score {
                         best_score = score;
                         best_start = local_idx1;
@@ -408,7 +408,7 @@ impl ObjectDetector {
                 }
                 let avg_neighbor = sum_neighbor / neighbor_count;
                 let protrusion = avg_neighbor - dist;
-                if protrusion > 40.0 && 70.0 <= dist && dist <= 1200.0 {
+                if protrusion > 80.0 && 70.0 <= dist && dist <= 1200.0 {
                     if protrusion > max_protrusion {
                         max_protrusion = protrusion;
                         best_fallback_idx = i;
