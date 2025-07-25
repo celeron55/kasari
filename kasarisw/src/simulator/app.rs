@@ -567,15 +567,22 @@ impl eframe::App for MyApp {
                         ui.end_row();
 
                         ui.label(
-                            egui::RichText::new("Sim: Velocity/intended ratio:")
+                            egui::RichText::new("Sim: Intended movement age:")
                                 .text_style(large_text.clone())
                                 .color(egui::Color32::from_gray(220)),
                         );
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.label(
                                 egui::RichText::new(format!(
-                                    "{}",
-                                    self.event_source.get_logic().unwrap().velocity_ratio
+                                    "{:.3} s",
+                                    self.virtual_elapsed
+                                        - self
+                                            .event_source
+                                            .get_logic()
+                                            .unwrap()
+                                            .intended_movement_velocity_timestamp
+                                            as f64
+                                            / 1_000_000.0
                                 ))
                                 .text_style(large_text.clone())
                                 .color(egui::Color32::from_gray(220)),
@@ -584,35 +591,22 @@ impl eframe::App for MyApp {
                         ui.end_row();
 
                         ui.label(
-                            egui::RichText::new("Sim: Intended angle change:")
+                            egui::RichText::new("Sim: Away from wall age:")
                                 .text_style(large_text.clone())
                                 .color(egui::Color32::from_gray(220)),
                         );
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.label(
                                 egui::RichText::new(format!(
-                                    "{}",
-                                    self.event_source.get_logic().unwrap().intended_angle_change
-                                ))
-                                .text_style(large_text.clone())
-                                .color(egui::Color32::from_gray(220)),
-                            );
-                        });
-                        ui.end_row();
-
-                        ui.label(
-                            egui::RichText::new("Sim: Velocity/intended integrator:")
-                                .text_style(large_text.clone())
-                                .color(egui::Color32::from_gray(220)),
-                        );
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(
-                                egui::RichText::new(format!(
-                                    "{}",
-                                    self.event_source
-                                        .get_logic()
-                                        .unwrap()
-                                        .velocity_ratio_integrator
+                                    "{:.3} s",
+                                    self.virtual_elapsed
+                                        - self
+                                            .event_source
+                                            .get_logic()
+                                            .unwrap()
+                                            .away_from_wall_timestamp
+                                            as f64
+                                            / 1_000_000.0
                                 ))
                                 .text_style(large_text.clone())
                                 .color(egui::Color32::from_gray(220)),
