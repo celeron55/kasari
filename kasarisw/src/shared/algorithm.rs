@@ -11,7 +11,7 @@ use num_traits::float::FloatCore;
 pub const NUM_BINS: usize = 90; // 4° per bin
 pub const BIN_ANGLE_STEP: f32 = 2.0 * PI / NUM_BINS as f32;
 const MAX_POINTS_PER_UPDATE: usize = 4;
-const CALIBRATION_COUNT: usize = 10;
+const CALIBRATION_COUNT: usize = 50;
 const CALIBRATION_MIN_G: f32 = -8.0;
 const CALIBRATION_MAX_G: f32 = 8.0;
 const TABLE_SIZE: usize = 360;
