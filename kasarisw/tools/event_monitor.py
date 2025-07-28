@@ -41,7 +41,7 @@ class SensorGUI:
         self.latest_data = defaultdict(lambda: "No data yet")
         
         # Connection management
-        self.host_port = "192.168.1.248:8080"  # Default host:port
+        self.host_port = "192.168.2.1:8080"  # Default host:port
         self.running = False
         self.thread = None
         self.sock = None
@@ -70,9 +70,6 @@ class SensorGUI:
         # Start updating GUI
         self.update_gui()
 
-        # Connect at startup
-        self.connect()
-
     def create_widgets(self):
         self.frame = ttk.Frame(self.root, padding="10")
         self.frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
@@ -84,8 +81,8 @@ class SensorGUI:
         
         # Connection controls
         ttk.Label(self.frame, text="Host:Port:").grid(row=0, column=0, sticky=tk.W)
-        self.host_entry = ttk.Entry(self.frame)
-        self.host_entry.insert(0, "192.168.1.248:8080")
+        self.host_entry = ttk.Combobox(self.frame, values=["192.168.2.1:8080", "192.168.1.248:8080"])
+        self.host_entry.set("192.168.2.1:8080")
         self.host_entry.grid(row=0, column=1, sticky=tk.W)
         
         self.connect_button = ttk.Button(self.frame, text="Connect", command=self.toggle_connect)
