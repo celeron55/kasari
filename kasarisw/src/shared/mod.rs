@@ -27,7 +27,7 @@ pub const MOVEMENT_SPEED_ATTACK: f32 = 1.3;
 pub const MAX_RPM_RAMP_RATE: f32 = 1500.0; // rpm/s
 pub const RPM_INITIAL_JUMP: f32 = 400.0; // rpm
 
-pub const RECEIVER_MAX_GAP_US: u64 = 1_000_000;
+pub const RECEIVER_TIMEOUT_US: u64 = 5_000_000;
 
 pub const LOG_LIDAR: bool = false;
 pub const LOG_ALL_LIDAR: bool = false;
@@ -74,7 +74,7 @@ pub mod kasari {
     use crate::shared::{
         get_current_timestamp, LOG_DETECTION, LOG_RECEIVER, LOG_VBAT, LOG_WIFI_CONTROL,
         MAX_RPM_RAMP_RATE, MIN_ATTACK_RPM, MIN_MOVE_RPM, MOVEMENT_SPEED_ATTACK,
-        MOVEMENT_SPEED_CENTER, RECEIVER_MAX_GAP_US, RPM_INITIAL_JUMP, TARGET_RPM,
+        MOVEMENT_SPEED_CENTER, RECEIVER_TIMEOUT_US, RPM_INITIAL_JUMP, TARGET_RPM,
     };
     #[cfg(target_os = "none")]
     use alloc::vec::Vec;
@@ -314,7 +314,7 @@ pub mod kasari {
                         }
                         None => {
                             if let Some(last_ts) = self.last_valid_receiver_ts {
-                                if _timestamp - last_ts > RECEIVER_MAX_GAP_US {
+                                if _timestamp - last_ts > RECEIVER_TIMEOUT_US {
                                     self.autonomous_enabled = false;
                                     self.reset_targets();
                                     self.motor_control_plan = None;
