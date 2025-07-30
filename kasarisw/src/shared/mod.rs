@@ -28,8 +28,7 @@ pub const MOVEMENT_SPEED_ATTACK: f32 = 1.3;
 pub const MAX_RPM_RAMP_RATE: f32 = 1500.0; // rpm/s
 pub const RPM_INITIAL_JUMP: f32 = 400.0; // rpm
 
-pub const RECEIVER_TIMEOUT_US: u64 = 5_000_000;
-pub const WIFI_TIMEOUT_US: u64 = 5_000_000;
+pub const FAILSAFE_TIMEOUT_US: u64 = 5_000_000;
 
 pub const LOG_LIDAR: bool = false;
 pub const LOG_ALL_LIDAR: bool = false;
@@ -76,8 +75,8 @@ pub mod kasari {
     use crate::shared::{
         get_current_timestamp, LOG_DETECTION, LOG_RECEIVER, LOG_VBAT, LOG_WIFI_CONTROL,
         MAX_RPM_RAMP_RATE, MIN_ATTACK_RPM, MIN_MOVE_RPM, MOVEMENT_SPEED_ATTACK,
-        MOVEMENT_SPEED_CENTER, RECEIVER_TIMEOUT_US, RPM_INITIAL_JUMP, TARGET_RPM,
-        REVERSE_ROTATION_MAX_RPM, WIFI_TIMEOUT_US,
+        MOVEMENT_SPEED_CENTER, RPM_INITIAL_JUMP, TARGET_RPM,
+        REVERSE_ROTATION_MAX_RPM, FAILSAFE_TIMEOUT_US,
     };
     #[cfg(target_os = "none")]
     use alloc::vec::Vec;
@@ -204,7 +203,9 @@ pub mod kasari {
         target: ControlTargets,
         pub reverse_rotation: bool,
         reverse_rotation_ts: u64,
+        last_receiver_event_ts: u64,
         last_valid_receiver_ts: Option<u64>,
+        last_receiver_pulse: f32,
         stats_step_count: u64,
         stats_step_sum_us: u64,
         stats_step_min_us: u64,
@@ -220,7 +221,11 @@ pub mod kasari {
         low_rpm_start_ts: Option<u64>,
         last_reset_attempt_ts: u64,
         reset_start_ts: Option<u64>,
-        last_wifi_control_ts: Option<u64>,
+        last_wifi_ts: u64,
+        last_wifi_mode: u8,
+        last_wifi_r: f32,
+        last_wifi_m: f32,
+        last_wifi_t: f32,
     }
 
     impl MainLogic {
@@ -246,7 +251,9 @@ pub mod kasari {
                 target: ControlTargets::default(),
                 reverse_rotation,
                 reverse_rotation_ts: 0,
+                last_receiver_event_ts: 0,
                 last_valid_receiver_ts: None,
+                last_receiver_pulse: 0.0,
                 stats_step_count: 0,
                 stats_step_sum_us: 0,
                 stats_step_min_us: 0,
@@ -262,7 +269,11 @@ pub mod kasari {
                 low_rpm_start_ts: None,
                 last_reset_attempt_ts: 0,
                 reset_start_ts: None,
-                last_wifi_control_ts: None,
+                last_wifi_ts: 0,
+                last_wifi_mode: 0,
+                last_wifi_r: 0.0,
+                last_wifi_m: 0.0,
+                last_wifi_t: 0.0,
             }
         }
 
@@ -300,44 +311,17 @@ pub mod kasari {
                 InputEvent::Lidar(..) | InputEvent::Accelerometer(..) | InputEvent::Planner(..) => {
                 }
                 InputEvent::Receiver(_timestamp, _ch, pulse_length) => {
-                    if self.control_mode != ControlMode::RcReceiver {
-                        return;
-                    }
-                    if !self.vbat_ok {
-                        self.autonomous_enabled = false;
-                        self.motor_control_plan = None;
-                        return;
-                    }
-                    match pulse_length {
-                        Some(pulse_length) => {
-                            let stick_percent = (pulse_length - 1500.0) * 0.2;
-                            if LOG_RECEIVER {
-                                println!(
-                                    "pulse_length -> stick_percent: {:?} -> {:?}",
-                                    pulse_length, stick_percent
-                                );
-                            }
-                            self.autonomous_enabled = stick_percent >= 5.0;
-                            self.last_valid_receiver_ts = Some(_timestamp);
-                            if !self.autonomous_enabled {
-                                self.reset_targets();
-                            }
+                    if _ch == 0 {
+                        if LOG_RECEIVER {
+                            println!(
+                                "Receiver pulse_length: {:?}",
+                                pulse_length
+                            );
                         }
-                        None => {
-                            if let Some(last_ts) = self.last_valid_receiver_ts {
-                                if _timestamp - last_ts > RECEIVER_TIMEOUT_US {
-                                    self.autonomous_enabled = false;
-                                    self.reset_targets();
-                                    self.motor_control_plan = None;
-                                } else {
-                                    // Ignore transient null and retain previous
-                                    // autonomous_enabled state
-                                }
-                            } else {
-                                self.autonomous_enabled = false;
-                                self.reset_targets();
-                                self.motor_control_plan = None;
-                            }
+                        self.last_receiver_event_ts = _timestamp;
+                        if let Some(pl) = pulse_length {
+                            self.last_valid_receiver_ts = Some(_timestamp);
+                            self.last_receiver_pulse = pl;
                         }
                     }
                 }
@@ -365,25 +349,11 @@ pub mod kasari {
                     if LOG_WIFI_CONTROL {
                         println!("WifiControl({}, {}, {}, {})", mode, r, m, t);
                     }
-                    self.control_mode = ControlMode::from(mode);
-                    self.autonomous_enabled = self.control_mode == ControlMode::Autonomous;
-                    if !self.autonomous_enabled {
-                        self.autonomous_start_ts = None;
-                        if self.control_mode == ControlMode::RcReceiver {
-                            // When switching to RC via Wifi mode=0, respect current autonomous_enabled from RC
-                            // But if switching from manual/autonomous to RC, reset if not already set
-                            if self.control_mode != ControlMode::RcReceiver {
-                                self.reset_targets();
-                            }
-                        } else {
-                            self.reset_targets();
-                        }
-                    }
-                    self.control_rotation_speed = r;
-                    self.control_movement_speed = m;
-                    self.control_turning_speed = t;
-                    self.update_targets();
-                    self.last_wifi_control_ts = Some(_timestamp);
+                    self.last_wifi_ts = _timestamp;
+                    self.last_wifi_mode = mode;
+                    self.last_wifi_r = r;
+                    self.last_wifi_m = m;
+                    self.last_wifi_t = t;
                 }
                 InputEvent::Stats(_ts, _stats) => {}
             }
@@ -604,24 +574,48 @@ pub mod kasari {
         ) {
             let step_start = get_current_timestamp();
 
-            // Check WiFi control timeout
-            if self.control_mode != ControlMode::RcReceiver {
-                match self.last_wifi_control_ts {
-                    Some(last_ts) if timestamp - last_ts > WIFI_TIMEOUT_US => {
-                        self.control_mode = ControlMode::RcReceiver;
-                        self.autonomous_enabled = false;
-                        self.autonomous_start_ts = None;
-                        self.reset_targets();
+            // Determine control mode and enabled state based on timeouts and last inputs
+            let wifi_active = self.last_wifi_ts != 0 && timestamp - self.last_wifi_ts < FAILSAFE_TIMEOUT_US;
+            if wifi_active {
+                self.control_mode = ControlMode::from(self.last_wifi_mode);
+                self.control_rotation_speed = self.last_wifi_r;
+                self.control_movement_speed = self.last_wifi_m;
+                self.control_turning_speed = self.last_wifi_t;
+                match self.control_mode {
+                    ControlMode::Autonomous => {
+                        self.autonomous_enabled = true;
                     }
-                    None => {
-                        self.control_mode = ControlMode::RcReceiver;
+                    ControlMode::ManualWifi => {
                         self.autonomous_enabled = false;
-                        self.autonomous_start_ts = None;
-                        self.reset_targets();
                     }
-                    _ => {}
+                    ControlMode::RcReceiver => {
+                        // Do not change autonomous_enabled; it will be handled in RC logic
+                    }
+                }
+                if !self.autonomous_enabled {
+                    self.autonomous_start_ts = None;
+                }
+            } else {
+                self.control_mode = ControlMode::RcReceiver;
+                // autonomous_enabled will be handled below
+            }
+
+            if self.control_mode == ControlMode::RcReceiver {
+                let receiver_active = self.last_receiver_event_ts != 0 && timestamp - self.last_receiver_event_ts < FAILSAFE_TIMEOUT_US;
+                let valid_pulse_active = self.last_valid_receiver_ts.map_or(false, |ts| timestamp - ts < FAILSAFE_TIMEOUT_US);
+                if !receiver_active || !valid_pulse_active {
+                    self.autonomous_enabled = false;
+                } else {
+                    let pl = self.last_receiver_pulse;
+                    let stick_percent = (pl - 1500.0) * 0.2;
+                    self.autonomous_enabled = stick_percent >= 5.0;
+                }
+                if !self.autonomous_enabled {
+                    self.autonomous_start_ts = None;
                 }
             }
+
+            self.update_targets();
 
             if (timestamp as i64 - self.last_planner_ts as i64) >= 50_000 {
                 self.last_planner_ts = timestamp;
