@@ -24,6 +24,9 @@ pub trait EventSource {
     fn get_robot(&self) -> Option<&Robot> {
         None
     }
+    fn get_robot_mut(&mut self) -> Option<&mut Robot> {
+        None
+    }
     fn get_world(&self) -> Option<&World> {
         None
     }
@@ -520,6 +523,10 @@ impl EventSource for SimEventSource {
 
     fn get_robot(&self) -> Option<&Robot> {
         Some(&self.robot)
+    }
+
+    fn get_robot_mut(&mut self) -> Option<&mut Robot> {
+        Some(&mut self.robot)
     }
 
     fn get_world(&self) -> Option<&World> {

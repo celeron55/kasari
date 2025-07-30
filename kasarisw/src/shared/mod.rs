@@ -103,7 +103,7 @@ pub mod kasari {
             (f32, f32),
             f32,
             f32,
-        ), // timestamp, MCP, latest_closest_wall, latest_open_space, latest_object_pos, measured_rpm
+        ), // timestamp, MCP, latest_closest_wall, latest_open_space, latest_object_pos, theta, rpm
         Stats(u64, Stats), // timestamp, statistics struct
     }
 
@@ -216,6 +216,9 @@ pub mod kasari {
         pub intended_movement_velocity_timestamp: u64,
         pub away_from_wall_timestamp: u64,
         pub close_to_wall_timestamp: u64,
+        low_rpm_start_ts: Option<u64>,
+        last_reset_attempt_ts: u64,
+        reset_start_ts: Option<u64>,
     }
 
     impl MainLogic {
@@ -254,6 +257,9 @@ pub mod kasari {
                 intended_movement_velocity_timestamp: 0,
                 away_from_wall_timestamp: 0,
                 close_to_wall_timestamp: 0,
+                low_rpm_start_ts: None,
+                last_reset_attempt_ts: 0,
+                reset_start_ts: None,
             }
         }
 
@@ -713,6 +719,57 @@ pub mod kasari {
                         self.detector.theta,
                         self.detector.rpm,
                     ));
+                }
+            }
+
+            // Motor controller reset logic
+            if let Some(plan) = &self.motor_control_plan {
+                let target_rpm_abs = plan.rotation_speed.abs();
+                let measured_rpm_abs = self.detector.rpm.abs();
+                if target_rpm_abs > 0.0 && measured_rpm_abs < 0.25 * target_rpm_abs {
+                    if let Some(start_ts) = self.low_rpm_start_ts {
+                        if timestamp - start_ts >= 2_000_000 && timestamp - self.last_reset_attempt_ts >= 10_000_000 {
+                            self.reset_start_ts = Some(timestamp);
+                            self.last_reset_attempt_ts = timestamp;
+                            self.low_rpm_start_ts = None;
+                            if debug {
+                                println!("Initiating motor controller reset at ts={}", timestamp);
+                            }
+                        }
+                    } else {
+                        self.low_rpm_start_ts = Some(timestamp);
+                    }
+                } else {
+                    self.low_rpm_start_ts = None;
+                }
+            }
+
+            if let Some(reset_ts) = self.reset_start_ts {
+                if timestamp - reset_ts < 2_000_000 {
+                    let reset_plan = MotorControlPlan {
+                        timestamp,
+                        rotation_speed: 0.0,
+                        movement_x: 0.0,
+                        movement_y: 0.0,
+                    };
+                    self.motor_control_plan = Some(reset_plan.clone());
+                    if let Some(ref publisher) = publisher {
+                        publisher.publish_immediate(InputEvent::Planner(
+                            timestamp,
+                            reset_plan,
+                            self.detection_state.closest_wall,
+                            self.detection_state.open_space,
+                            self.detection_state.object_pos,
+                            self.detector.theta,
+                            self.detector.rpm,
+                        ));
+                    }
+                    self.current_rotation_speed = 0.0;
+                    if debug {
+                        println!("Motor controller reset in progress at ts={}", timestamp);
+                    }
+                } else {
+                    self.reset_start_ts = None;
                 }
             }
 

@@ -967,6 +967,12 @@ impl eframe::App for MyApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
 
+        if ctx.input(|i| i.key_down(egui::Key::O)) {
+            if let Some(robot) = self.event_source.get_robot_mut() {
+                robot.rpm = 0.0;
+            }
+        }
+
         ctx.request_repaint();
     }
 }
