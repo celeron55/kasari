@@ -10,6 +10,7 @@ from parse_events import parse_event
 import json
 import os
 from datetime import datetime
+import argparse
 
 # Shared queues for events and status (thread-safe)
 event_queue = queue.Queue()
@@ -28,7 +29,7 @@ EVENT_TAGS = {
 
 # GUI class
 class SensorGUI:
-    def __init__(self, root):
+    def __init__(self, root, enable_manual=False):
         self.root = root
         self.root.title("Sensor Data Monitor")
         self.root.geometry("1100x900")
@@ -47,13 +48,15 @@ class SensorGUI:
         self.sock = None
         
         # Control states
+        self.enable_manual = enable_manual
         self.control_active = False
         self.autonomous_active = False
         
-        # Slider variables
-        self.r_var = tk.DoubleVar(value=0.0)
-        self.m_var = tk.DoubleVar(value=0.0)
-        self.t_var = tk.DoubleVar(value=0.0)
+        if self.enable_manual:
+            # Slider variables
+            self.r_var = tk.DoubleVar(value=0.0)
+            self.m_var = tk.DoubleVar(value=0.0)
+            self.t_var = tk.DoubleVar(value=0.0)
         
         # Log file
         os.makedirs('log', exist_ok=True)
@@ -121,31 +124,39 @@ class SensorGUI:
         self.stats_label = ttk.Label(self.frame, text=self.format_stats())
         self.stats_label.grid(row=13, column=0, columnspan=3, sticky=tk.W)
         
-        # Large toggle button for control
+        # Large toggle button for control (if enabled)
         style = ttk.Style()
         style.configure('Large.TButton', font=('Helvetica', 20), padding=10)
-        self.control_button = ttk.Button(self.frame, text="Control Target: OFF", command=self.toggle_control, style='Large.TButton')
-        self.control_button.grid(row=14, column=0, columnspan=3, sticky=tk.NSEW, pady=10)
+        
+        next_row = 14
+        if self.enable_manual:
+            self.control_button = ttk.Button(self.frame, text="Control Target: OFF", command=self.toggle_control, style='Large.TButton')
+            self.control_button.grid(row=next_row, column=0, columnspan=3, sticky=tk.NSEW, pady=10)
+            next_row += 1
         
         # Autonomous mode button
         self.autonomous_button = ttk.Button(self.frame, text="Autonomous Mode: OFF", command=self.toggle_autonomous, style='Large.TButton')
-        self.autonomous_button.grid(row=15, column=0, columnspan=3, sticky=tk.NSEW, pady=10)
+        self.autonomous_button.grid(row=next_row, column=0, columnspan=3, sticky=tk.NSEW, pady=10)
+        next_row += 1
         
-        # Sliders for r, m, t
-        ttk.Label(self.frame, text="Rotation:").grid(row=16, column=0, sticky=tk.W)
-        self.r_scale = ttk.Scale(self.frame, from_=-2000.0, to=2000.0, orient='horizontal', variable=self.r_var)
-        self.r_scale.grid(row=16, column=1, columnspan=2, sticky=tk.EW)
-        
-        ttk.Label(self.frame, text="Movement:").grid(row=17, column=0, sticky=tk.W)
-        self.m_scale = ttk.Scale(self.frame, from_=-100.0, to=100.0, orient='horizontal', variable=self.m_var)
-        self.m_scale.grid(row=17, column=1, columnspan=2, sticky=tk.EW)
-        
-        ttk.Label(self.frame, text="Turning:").grid(row=18, column=0, sticky=tk.W)
-        self.t_scale = ttk.Scale(self.frame, from_=-100.0, to=100.0, orient='horizontal', variable=self.t_var)
-        self.t_scale.grid(row=18, column=1, columnspan=2, sticky=tk.EW)
-        
-        # Initially disable sliders
-        self.set_sliders_state('disabled')
+        # Sliders for r, m, t (if enabled)
+        if self.enable_manual:
+            ttk.Label(self.frame, text="Rotation:").grid(row=next_row, column=0, sticky=tk.W)
+            self.r_scale = ttk.Scale(self.frame, from_=-2000.0, to=2000.0, orient='horizontal', variable=self.r_var)
+            self.r_scale.grid(row=next_row, column=1, columnspan=2, sticky=tk.EW)
+            next_row += 1
+            
+            ttk.Label(self.frame, text="Movement:").grid(row=next_row, column=0, sticky=tk.W)
+            self.m_scale = ttk.Scale(self.frame, from_=-100.0, to=100.0, orient='horizontal', variable=self.m_var)
+            self.m_scale.grid(row=next_row, column=1, columnspan=2, sticky=tk.EW)
+            next_row += 1
+            
+            ttk.Label(self.frame, text="Turning:").grid(row=next_row, column=0, sticky=tk.W)
+            self.t_scale = ttk.Scale(self.frame, from_=-100.0, to=100.0, orient='horizontal', variable=self.t_var)
+            self.t_scale.grid(row=next_row, column=1, columnspan=2, sticky=tk.EW)
+            
+            # Initially disable sliders
+            self.set_sliders_state('disabled')
 
     def on_resize(self, event):
         # Update wraplength based on current frame width
@@ -361,6 +372,10 @@ class SensorGUI:
 
 # Main entry point
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Sensor Data Monitor")
+    parser.add_argument('--enable-manual', action='store_true', help='Enable manual control button and sliders')
+    args = parser.parse_args()
+
     root = tk.Tk()
-    app = SensorGUI(root)
+    app = SensorGUI(root, enable_manual=args.enable_manual)
     root.mainloop()
