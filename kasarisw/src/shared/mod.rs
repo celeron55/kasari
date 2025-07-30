@@ -502,10 +502,10 @@ pub mod kasari {
                 let max = 0.7;
                 let adjust_x = (velocity_diff_x * gain).max(-max).min(max);
                 let adjust_y = (velocity_diff_y * gain).max(-max).min(max);
-                println!(
+                /*println!(
                     "velocity_diff: {:.0}, {:.0}, adjust: {:.2}, {:.2}",
                     velocity_diff_x, velocity_diff_y, adjust_x, adjust_y,
-                );
+                );*/
                 (intended_x + adjust_x, intended_y + adjust_y)
 
                 /*// NOTE: This doesn't work properly so it is commented out
