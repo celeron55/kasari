@@ -507,7 +507,14 @@ async fn main(spawner: Spawner) {
 
         // This allows checking that the accelerometer has been calibrated when
         // the robot is idling
-        if libm::fabsf(logic.detector.rpm) < 100.0 {
+        if logic.vbat > 4.5 && !logic.vbat_ok {
+            // Low battery
+            if embassy_time::Instant::now().as_millis() % 400 < 100 {
+                led_pin.set_high();
+            } else {
+                led_pin.set_low();
+            }
+        } else if libm::fabsf(logic.detector.rpm) < 100.0 {
             led_pin.set_high();
         } else {
             led_pin.set_low();
