@@ -29,6 +29,7 @@ pub const MAX_RPM_RAMP_RATE: f32 = 1500.0; // rpm/s
 pub const RPM_INITIAL_JUMP: f32 = 400.0; // rpm
 
 pub const RECEIVER_TIMEOUT_US: u64 = 5_000_000;
+pub const WIFI_TIMEOUT_US: u64 = 5_000_000;
 
 pub const LOG_LIDAR: bool = false;
 pub const LOG_ALL_LIDAR: bool = false;
@@ -76,7 +77,7 @@ pub mod kasari {
         get_current_timestamp, LOG_DETECTION, LOG_RECEIVER, LOG_VBAT, LOG_WIFI_CONTROL,
         MAX_RPM_RAMP_RATE, MIN_ATTACK_RPM, MIN_MOVE_RPM, MOVEMENT_SPEED_ATTACK,
         MOVEMENT_SPEED_CENTER, RECEIVER_TIMEOUT_US, RPM_INITIAL_JUMP, TARGET_RPM,
-        REVERSE_ROTATION_MAX_RPM,
+        REVERSE_ROTATION_MAX_RPM, WIFI_TIMEOUT_US,
     };
     #[cfg(target_os = "none")]
     use alloc::vec::Vec;
@@ -219,6 +220,7 @@ pub mod kasari {
         low_rpm_start_ts: Option<u64>,
         last_reset_attempt_ts: u64,
         reset_start_ts: Option<u64>,
+        last_wifi_control_ts: Option<u64>,
     }
 
     impl MainLogic {
@@ -260,6 +262,7 @@ pub mod kasari {
                 low_rpm_start_ts: None,
                 last_reset_attempt_ts: 0,
                 reset_start_ts: None,
+                last_wifi_control_ts: None,
             }
         }
 
@@ -380,6 +383,7 @@ pub mod kasari {
                     self.control_movement_speed = m;
                     self.control_turning_speed = t;
                     self.update_targets();
+                    self.last_wifi_control_ts = Some(_timestamp);
                 }
                 InputEvent::Stats(_ts, _stats) => {}
             }
@@ -599,6 +603,25 @@ pub mod kasari {
             debug: bool,
         ) {
             let step_start = get_current_timestamp();
+
+            // Check WiFi control timeout
+            if self.control_mode != ControlMode::RcReceiver {
+                match self.last_wifi_control_ts {
+                    Some(last_ts) if timestamp - last_ts > WIFI_TIMEOUT_US => {
+                        self.control_mode = ControlMode::RcReceiver;
+                        self.autonomous_enabled = false;
+                        self.autonomous_start_ts = None;
+                        self.reset_targets();
+                    }
+                    None => {
+                        self.control_mode = ControlMode::RcReceiver;
+                        self.autonomous_enabled = false;
+                        self.autonomous_start_ts = None;
+                        self.reset_targets();
+                    }
+                    _ => {}
+                }
+            }
 
             if (timestamp as i64 - self.last_planner_ts as i64) >= 50_000 {
                 self.last_planner_ts = timestamp;
