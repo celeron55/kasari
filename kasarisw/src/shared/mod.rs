@@ -20,6 +20,7 @@ use algorithm::{DetectionResult, ObjectDetector};
 pub const TARGET_RPM: f32 = 1200.0;
 pub const MIN_MOVE_RPM: f32 = 550.0;
 pub const MIN_ATTACK_RPM: f32 = 800.0;
+pub const REVERSE_ROTATION_MAX_RPM: f32 = 80.0;
 
 pub const MOVEMENT_SPEED_CENTER: f32 = 1.3;
 pub const MOVEMENT_SPEED_ATTACK: f32 = 1.3;
@@ -75,6 +76,7 @@ pub mod kasari {
         get_current_timestamp, LOG_DETECTION, LOG_RECEIVER, LOG_VBAT, LOG_WIFI_CONTROL,
         MAX_RPM_RAMP_RATE, MIN_ATTACK_RPM, MIN_MOVE_RPM, MOVEMENT_SPEED_ATTACK,
         MOVEMENT_SPEED_CENTER, RECEIVER_TIMEOUT_US, RPM_INITIAL_JUMP, TARGET_RPM,
+        REVERSE_ROTATION_MAX_RPM,
     };
     #[cfg(target_os = "none")]
     use alloc::vec::Vec;
@@ -538,7 +540,7 @@ pub mod kasari {
             }
 
             // Handle rotation reversal if stuck
-            if ts > self.reverse_rotation_ts + 5_000_000 && self.detector.rpm.abs() < 150.0 {
+            if ts > self.reverse_rotation_ts + 5_000_000 && self.detector.rpm.abs() < REVERSE_ROTATION_MAX_RPM {
                 self.reverse_rotation_ts = ts;
                 self.reverse_rotation = !self.reverse_rotation;
             }
