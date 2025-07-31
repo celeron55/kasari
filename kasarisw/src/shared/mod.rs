@@ -732,10 +732,10 @@ pub mod kasari {
             if let Some(plan) = &self.motor_control_plan {
                 let target_rpm_abs = plan.rotation_speed.abs();
                 let measured_rpm_abs = self.detector.rpm.abs();
-                if target_rpm_abs > 0.0 && measured_rpm_abs < 0.25 * target_rpm_abs {
+                if target_rpm_abs > 0.0 && measured_rpm_abs < 0.10 * target_rpm_abs {
                     if let Some(start_ts) = self.low_rpm_start_ts {
                         if timestamp as i64 - start_ts as i64 >= 2_000_000
-                            && timestamp as i64 - self.last_reset_attempt_ts as i64 >= 6_000_000
+                            && timestamp as i64 - self.last_reset_attempt_ts as i64 >= 3_000_000
                         {
                             self.reset_start_ts = Some(timestamp);
                             self.last_reset_attempt_ts = timestamp;
@@ -755,7 +755,7 @@ pub mod kasari {
             }
 
             let is_in_reset = self.reset_start_ts.is_some()
-                && (timestamp as i64 - self.reset_start_ts.unwrap() as i64) < 1_500_000;
+                && (timestamp as i64 - self.reset_start_ts.unwrap() as i64) < 500_000;
 
             let plan_opt: Option<MotorControlPlan> = if is_in_reset {
                 self.current_rotation_speed = 0.0;
