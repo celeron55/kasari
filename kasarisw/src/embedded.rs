@@ -1137,12 +1137,10 @@ async fn log_task(
         critical_section::with(|cs| {
             let mut buf = ram_buffer.borrow(cs).borrow_mut();
             for &byte in &serialized {
-                for &byte in &serialized {
-                    if buf.is_full() {
-                        break;
-                    }
-                    buf.push(byte);
+                if buf.is_full() {
+                    break;
                 }
+                buf.push(byte);
             }
         });
 
