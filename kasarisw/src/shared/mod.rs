@@ -575,7 +575,7 @@ pub mod kasari {
             let step_start = get_current_timestamp();
 
             // Determine control mode and enabled state based on timeouts and last inputs
-            let wifi_active = self.last_wifi_ts != 0 && timestamp - self.last_wifi_ts < FAILSAFE_TIMEOUT_US;
+            let wifi_active = self.last_wifi_ts != 0 && timestamp as i64 - (self.last_wifi_ts as i64) < FAILSAFE_TIMEOUT_US as i64;
             if wifi_active {
                 self.control_mode = ControlMode::from(self.last_wifi_mode);
                 self.control_rotation_speed = self.last_wifi_r;
