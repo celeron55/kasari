@@ -745,7 +745,7 @@ pub mod kasari {
                 let measured_rpm_abs = self.detector.rpm.abs();
                 if target_rpm_abs > 0.0 && measured_rpm_abs < 0.25 * target_rpm_abs {
                     if let Some(start_ts) = self.low_rpm_start_ts {
-                        if timestamp - start_ts >= 2_000_000 && timestamp - self.last_reset_attempt_ts >= 10_000_000 {
+                        if timestamp as i64 - start_ts as i64 >= 2_000_000 && timestamp as i64 - self.last_reset_attempt_ts as i64 >= 10_000_000 {
                             self.reset_start_ts = Some(timestamp);
                             self.last_reset_attempt_ts = timestamp;
                             self.low_rpm_start_ts = None;
