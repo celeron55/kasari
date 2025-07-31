@@ -17,9 +17,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub mod algorithm;
 use algorithm::{DetectionResult, ObjectDetector};
 
-pub const TARGET_RPM: f32 = 1280.0; // Full RPM
+pub const TARGET_RPM: f32 = 1200.0; // Full RPM
 pub const TARGET_RPM_BASE_VOLTAGE: f32 = 12.4; // Full voltage
-pub const TARGET_RPM_DERATE_PER_VOLT: f32 = 200.0;
+pub const TARGET_RPM_DERATE_PER_VOLT: f32 = 100.0;
 pub const MIN_MOVE_RPM: f32 = 550.0;
 pub const MIN_ATTACK_RPM: f32 = 800.0;
 pub const REVERSE_ROTATION_MAX_RPM: f32 = 80.0;
