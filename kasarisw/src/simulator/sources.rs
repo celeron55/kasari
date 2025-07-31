@@ -432,7 +432,7 @@ impl SimEventSource {
 
             if next_accel <= next_ts {
                 let omega = (self.robot.rpm / 60.0 * 2.0 * PI).abs();
-                let a_g = (omega * omega * 0.0155) / 9.81;
+                let a_g = (omega * omega * 0.0145) / 9.81;
                 // Allow calibration during the first 50 samples
                 // Add bias similarly to what the real hardware has
                 let ay = if next_ts <= 500_000 { 0.0 } else { a_g } + 3.4;

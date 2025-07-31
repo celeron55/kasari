@@ -88,8 +88,7 @@ impl ObjectDetector {
 
     pub fn accel_to_rpm(&self, accel_g: f32) -> f32 {
         let g = 9.81;
-        //let r = 0.0145; // Correct when RC receiver is uninstalled
-        let r = 0.0155; // Correct when RC receiver is installed
+        let r = 0.0145; // Correct when RC receiver and extra capacitors are installed
         let a_calibrated = accel_g - self.accel_offset;
         let a = a_calibrated.abs() * g;
         let omega = sqrtf(a / r);
