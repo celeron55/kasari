@@ -92,6 +92,15 @@ def main():
 
         while len(batch_buffer) >= BATCH_FLUSH_SIZE:
             batch = batch_buffer[:BATCH_FLUSH_SIZE]
+            seq_bytes = batch[0:4]
+            seq = struct.unpack('<I', seq_bytes)[0]
+            if seq == 0xffffffff:
+                msg = batch[4:].rstrip(b'\x00').decode('utf-8', errors='ignore')
+                print("---");
+                print("PANIC:", msg)
+                print("---");
+                batch_buffer = batch_buffer[BATCH_FLUSH_SIZE:]
+                continue
             data = batch[4:]  # Ignore seq
             event_buffer += data
             batch_buffer = batch_buffer[BATCH_FLUSH_SIZE:]

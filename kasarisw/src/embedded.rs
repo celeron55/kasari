@@ -40,7 +40,7 @@ use ringbuffer::ConstGenericRingBuffer;
 use static_cell::StaticCell;
 extern crate alloc;
 use alloc::boxed::Box;
-use arrayvec::ArrayVec;
+use arrayvec::{ArrayVec, ArrayString};
 use core::cell::RefCell;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use critical_section::Mutex;
@@ -152,6 +152,74 @@ static LAST_HIGH_RPM_TS: AtomicU32 = AtomicU32::new(0);
 
 static FLASH_STORAGE: StaticCell<Mutex<RefCell<FlashStorage>>> = StaticCell::new();
 
+const PANIC_OFFSET: u32 = 0x200000;
+const PANIC_SIZE: u32 = 0x1000;
+
+static mut FLASH_STORAGE_REF: Option<&'static Mutex<RefCell<FlashStorage>>> = None;
+
+static LED_PIN: StaticCell<Mutex<RefCell<Option<Output<'static>>>>> = StaticCell::new();
+
+static mut LED_PIN_REF: Option<&'static Mutex<RefCell<Option<Output<'static>>>>> = None;
+
+use core::panic::PanicInfo;
+
+#[panic_handler]
+fn panic(info: &PanicInfo) -> ! {
+    use core::fmt::Write;
+    use esp_hal::delay::Delay;
+
+    esp_println::println!("PANIC: {}", info);
+
+    let mut msg = ArrayString::<1024>::new();
+    let _ = write!(&mut msg, "{}", info);
+    let bytes = msg.as_bytes();
+    let len = bytes.len() as u32;
+    let len_bytes = len.to_le_bytes();
+
+    let data_len = bytes.len();
+    let total_data_len = 4 + data_len;
+    let padded_len = ((total_data_len + 31) / 32 * 32) as usize;
+    let mut combined = [0xffu8; 1056]; // Enough for 4 + 1024 + padding
+    combined[0..4].copy_from_slice(&len_bytes);
+    combined[4..4 + data_len].copy_from_slice(bytes);
+
+    let delay = Delay::new();
+
+    critical_section::with(|cs| {
+        let flash_storage = unsafe { FLASH_STORAGE_REF.unwrap() };
+        let mut storage = flash_storage.borrow(cs).borrow_mut();
+        let _ = storage.erase(PANIC_OFFSET, PANIC_OFFSET + PANIC_SIZE);
+    });
+
+    delay.delay_millis(10);
+
+    critical_section::with(|cs| {
+        let flash_storage = unsafe { FLASH_STORAGE_REF.unwrap() };
+        let mut storage = flash_storage.borrow(cs).borrow_mut();
+        let _ = storage.write(PANIC_OFFSET, &combined[0..padded_len]);
+    });
+
+    for _ in 0..5 {
+        critical_section::with(|cs| {
+            let mut led = unsafe { LED_PIN_REF.unwrap().borrow(cs).borrow_mut() };
+            if let Some(pin) = led.as_mut() {
+                pin.set_high();
+            }
+        });
+        esp_println::println!("PANIC: {}", info);
+        delay.delay_millis(500);
+        critical_section::with(|cs| {
+            let mut led = unsafe { LED_PIN_REF.unwrap().borrow(cs).borrow_mut() };
+            if let Some(pin) = led.as_mut() {
+                pin.set_low();
+            }
+        });
+        delay.delay_millis(500);
+    }
+
+    esp_hal::system::software_reset();
+}
+
 #[esp_hal_embassy::main]
 async fn main(spawner: Spawner) {
     esp_println::println!("Init!");
@@ -170,6 +238,9 @@ async fn main(spawner: Spawner) {
     // GPIO
     let rc_receiver_ch1_pinmap = peripherals.GPIO34;
     let mut led_pin = Output::new(peripherals.GPIO2, Level::Low, OutputConfig::default());
+
+    let led_pin_static = LED_PIN.init(Mutex::new(RefCell::new(Some(led_pin))));
+    unsafe { LED_PIN_REF = Some(led_pin_static); }
 
     // ADC (battery voltage monitoring)
     let mut adc1_config = AdcConfig::new();
@@ -349,6 +420,7 @@ async fn main(spawner: Spawner) {
 
     // Flash storage
     let flash_storage = FLASH_STORAGE.init(Mutex::new(RefCell::new(FlashStorage::new())));
+    unsafe { FLASH_STORAGE_REF = Some(flash_storage); }
 
     // Scan flash to find next write position and sequence
     let mut max_seq: u32 = 0;
@@ -507,17 +579,20 @@ async fn main(spawner: Spawner) {
 
         // This allows checking that the accelerometer has been calibrated when
         // the robot is idling
-        if logic.vbat > 4.5 && !logic.vbat_ok {
-            // Low battery
-            if embassy_time::Instant::now().as_millis() % 400 < 100 {
-                led_pin.set_high();
-            } else {
-                led_pin.set_low();
-            }
-        } else if libm::fabsf(logic.detector.rpm) < 100.0 {
-            led_pin.set_high();
+        if libm::fabsf(logic.detector.rpm) < 100.0 {
+            critical_section::with(|cs| {
+                let mut led = unsafe { LED_PIN_REF.unwrap().borrow(cs).borrow_mut() };
+                if let Some(pin) = led.as_mut() {
+                    pin.set_high();
+                }
+            });
         } else {
-            led_pin.set_low();
+            critical_section::with(|cs| {
+                let mut led = unsafe { LED_PIN_REF.unwrap().borrow(cs).borrow_mut() };
+                if let Some(pin) = led.as_mut() {
+                    pin.set_low();
+                }
+            });
         }
 
         let current_ts = embassy_time::Instant::now().as_millis() as u32;
@@ -952,6 +1027,40 @@ async fn download_task(
         println!("Download connected!");
         socket.set_timeout(None);
 
+        // Send panic info if available
+        let mut len_buf = [0u8; 4];
+        critical_section::with(|cs| {
+            let mut storage = flash_storage.borrow(cs).borrow_mut();
+            let _ = storage.read(PANIC_OFFSET, &mut len_buf);
+        });
+        let len = u32::from_le_bytes(len_buf);
+
+        if len > 0 && len <= (PANIC_SIZE - 4) {
+            let padded_len = (((len as usize) + 3) / 4 * 4) as usize;
+            let mut panic_buf = alloc::vec![0u8; padded_len];
+            critical_section::with(|cs| {
+                let mut storage = flash_storage.borrow(cs).borrow_mut();
+                let read_result = storage.read(PANIC_OFFSET + 4, &mut panic_buf);
+                if read_result.is_err() {
+                    println!("Panic message read failed: {:?}", read_result);
+                }
+            });
+
+            let mut special_batch = [0u8; BATCH_FLUSH_SIZE as usize];
+            special_batch[0..4].copy_from_slice(&0xffffffffu32.to_le_bytes());
+            special_batch[4..4 + (len as usize)].copy_from_slice(&panic_buf[0..(len as usize)]);
+
+            if let Err(e) = socket.write_all(&special_batch).await {
+                println!("Write error during panic send: {:?}", e);
+            } else {
+                // Clear panic after sending
+                critical_section::with(|cs| {
+                    let mut storage = flash_storage.borrow(cs).borrow_mut();
+                    let _ = storage.erase(PANIC_OFFSET, PANIC_OFFSET + PANIC_SIZE);
+                });
+            }
+        }
+
         // Dump all flash log data
         for i in 0..(LOG_FLASH_SIZE / BATCH_FLUSH_SIZE as u32) {
             let pos = i * BATCH_FLUSH_SIZE as u32;
@@ -1028,10 +1137,12 @@ async fn log_task(
         critical_section::with(|cs| {
             let mut buf = ram_buffer.borrow(cs).borrow_mut();
             for &byte in &serialized {
-                if buf.is_full() {
-                    break;
+                for &byte in &serialized {
+                    if buf.is_full() {
+                        break;
+                    }
+                    buf.push(byte);
                 }
-                buf.push(byte);
             }
         });
 
