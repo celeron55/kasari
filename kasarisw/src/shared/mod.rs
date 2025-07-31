@@ -73,10 +73,9 @@ pub mod kasari {
     use crate::shared::CriticalSectionRawMutex;
     use crate::shared::ObjectDetector;
     use crate::shared::{
-        get_current_timestamp, LOG_DETECTION, LOG_RECEIVER, LOG_VBAT, LOG_WIFI_CONTROL,
-        MAX_RPM_RAMP_RATE, MIN_ATTACK_RPM, MIN_MOVE_RPM, MOVEMENT_SPEED_ATTACK,
-        MOVEMENT_SPEED_CENTER, RPM_INITIAL_JUMP, TARGET_RPM,
-        REVERSE_ROTATION_MAX_RPM, FAILSAFE_TIMEOUT_US,
+        get_current_timestamp, FAILSAFE_TIMEOUT_US, LOG_DETECTION, LOG_RECEIVER, LOG_VBAT,
+        LOG_WIFI_CONTROL, MAX_RPM_RAMP_RATE, MIN_ATTACK_RPM, MIN_MOVE_RPM, MOVEMENT_SPEED_ATTACK,
+        MOVEMENT_SPEED_CENTER, REVERSE_ROTATION_MAX_RPM, RPM_INITIAL_JUMP, TARGET_RPM,
     };
     #[cfg(target_os = "none")]
     use alloc::vec::Vec;
@@ -104,7 +103,7 @@ pub mod kasari {
             f32,
             f32,
         ), // timestamp, MCP, latest_closest_wall, latest_open_space, latest_object_pos, theta, rpm
-        Stats(u64, Stats), // timestamp, statistics struct
+        Stats(u64, Stats),                   // timestamp, statistics struct
     }
 
     #[derive(Clone, Copy, Debug)]
@@ -315,10 +314,7 @@ pub mod kasari {
                 InputEvent::Receiver(_timestamp, _ch, pulse_length) => {
                     if _ch == 0 {
                         if LOG_RECEIVER {
-                            println!(
-                                "Receiver pulse_length: {:?}",
-                                pulse_length
-                            );
+                            println!("Receiver pulse_length: {:?}", pulse_length);
                         }
                         self.last_receiver_event_ts = _timestamp;
                         if let Some(pl) = pulse_length {
@@ -522,7 +518,9 @@ pub mod kasari {
             }
 
             // Handle rotation reversal if stuck
-            if ts > self.reverse_rotation_ts + 5_000_000 && self.detector.rpm.abs() < REVERSE_ROTATION_MAX_RPM {
+            if ts > self.reverse_rotation_ts + 5_000_000
+                && self.detector.rpm.abs() < REVERSE_ROTATION_MAX_RPM
+            {
                 self.reverse_rotation_ts = ts;
                 self.reverse_rotation = !self.reverse_rotation;
             }
@@ -577,7 +575,8 @@ pub mod kasari {
             let step_start = get_current_timestamp();
 
             // Determine control mode and enabled state based on timeouts and last inputs
-            let wifi_active = self.last_wifi_ts != 0 && timestamp as i64 - (self.last_wifi_ts as i64) < FAILSAFE_TIMEOUT_US as i64;
+            let wifi_active = self.last_wifi_ts != 0
+                && timestamp as i64 - (self.last_wifi_ts as i64) < FAILSAFE_TIMEOUT_US as i64;
             if wifi_active {
                 self.control_mode = ControlMode::from(self.last_wifi_mode);
                 self.control_rotation_speed = self.last_wifi_r;
@@ -603,8 +602,12 @@ pub mod kasari {
             }
 
             if self.control_mode == ControlMode::RcReceiver {
-                let receiver_active = self.last_receiver_event_ts != 0 && timestamp as i64 - (self.last_receiver_event_ts as i64) < FAILSAFE_TIMEOUT_US as i64;
-                let valid_pulse_active = self.last_valid_receiver_ts.map_or(false, |ts| timestamp as i64 - (ts as i64) < FAILSAFE_TIMEOUT_US as i64);
+                let receiver_active = self.last_receiver_event_ts != 0
+                    && timestamp as i64 - (self.last_receiver_event_ts as i64)
+                        < FAILSAFE_TIMEOUT_US as i64;
+                let valid_pulse_active = self.last_valid_receiver_ts.map_or(false, |ts| {
+                    timestamp as i64 - (ts as i64) < FAILSAFE_TIMEOUT_US as i64
+                });
                 if !receiver_active || !valid_pulse_active {
                     self.autonomous_enabled = false;
                 } else {
@@ -724,7 +727,9 @@ pub mod kasari {
                 let measured_rpm_abs = self.detector.rpm.abs();
                 if target_rpm_abs > 0.0 && measured_rpm_abs < 0.25 * target_rpm_abs {
                     if let Some(start_ts) = self.low_rpm_start_ts {
-                        if timestamp as i64 - start_ts as i64 >= 2_000_000 && timestamp as i64 - self.last_reset_attempt_ts as i64 >= 6_000_000 {
+                        if timestamp as i64 - start_ts as i64 >= 2_000_000
+                            && timestamp as i64 - self.last_reset_attempt_ts as i64 >= 6_000_000
+                        {
                             self.reset_start_ts = Some(timestamp);
                             self.last_reset_attempt_ts = timestamp;
                             self.low_rpm_start_ts = None;
@@ -742,7 +747,8 @@ pub mod kasari {
                 self.low_rpm_start_ts = None;
             }
 
-            let is_in_reset = self.reset_start_ts.is_some() && (timestamp as i64 - self.reset_start_ts.unwrap() as i64) < 1_500_000;
+            let is_in_reset = self.reset_start_ts.is_some()
+                && (timestamp as i64 - self.reset_start_ts.unwrap() as i64) < 1_500_000;
 
             let plan_opt: Option<MotorControlPlan> = if is_in_reset {
                 self.current_rotation_speed = 0.0;

@@ -40,7 +40,7 @@ use ringbuffer::ConstGenericRingBuffer;
 use static_cell::StaticCell;
 extern crate alloc;
 use alloc::boxed::Box;
-use arrayvec::{ArrayVec, ArrayString};
+use arrayvec::{ArrayString, ArrayVec};
 use core::cell::RefCell;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use critical_section::Mutex;
@@ -240,7 +240,9 @@ async fn main(spawner: Spawner) {
     let mut led_pin = Output::new(peripherals.GPIO2, Level::Low, OutputConfig::default());
 
     let led_pin_static = LED_PIN.init(Mutex::new(RefCell::new(Some(led_pin))));
-    unsafe { LED_PIN_REF = Some(led_pin_static); }
+    unsafe {
+        LED_PIN_REF = Some(led_pin_static);
+    }
 
     // ADC (battery voltage monitoring)
     let mut adc1_config = AdcConfig::new();
@@ -420,7 +422,9 @@ async fn main(spawner: Spawner) {
 
     // Flash storage
     let flash_storage = FLASH_STORAGE.init(Mutex::new(RefCell::new(FlashStorage::new())));
-    unsafe { FLASH_STORAGE_REF = Some(flash_storage); }
+    unsafe {
+        FLASH_STORAGE_REF = Some(flash_storage);
+    }
 
     // Scan flash to find next write position and sequence
     let mut max_seq: u32 = 0;
