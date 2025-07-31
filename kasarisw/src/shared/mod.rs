@@ -602,7 +602,7 @@ pub mod kasari {
 
             if self.control_mode == ControlMode::RcReceiver {
                 let receiver_active = self.last_receiver_event_ts != 0 && timestamp as i64 - (self.last_receiver_event_ts as i64) < FAILSAFE_TIMEOUT_US as i64;
-                let valid_pulse_active = self.last_valid_receiver_ts.map_or(false, |ts| timestamp - ts < FAILSAFE_TIMEOUT_US);
+                let valid_pulse_active = self.last_valid_receiver_ts.map_or(false, |ts| timestamp as i64 - (ts as i64) < FAILSAFE_TIMEOUT_US as i64);
                 if !receiver_active || !valid_pulse_active {
                     self.autonomous_enabled = false;
                 } else {
