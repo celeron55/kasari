@@ -17,7 +17,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub mod algorithm;
 use algorithm::{DetectionResult, ObjectDetector};
 
-pub const TARGET_RPM: f32 = 1200.0;
+pub const TARGET_RPM: f32 = 1400.0; // Full RPM
+pub const TARGET_RPM_BASE_VOLTAGE: f32 = 12.4; // Full voltage
+pub const TARGET_RPM_DERATE_PER_VOLT: f32 = 250.0;
 pub const MIN_MOVE_RPM: f32 = 550.0;
 pub const MIN_ATTACK_RPM: f32 = 800.0;
 pub const REVERSE_ROTATION_MAX_RPM: f32 = 80.0;
@@ -76,6 +78,7 @@ pub mod kasari {
         get_current_timestamp, FAILSAFE_TIMEOUT_US, LOG_DETECTION, LOG_RECEIVER, LOG_VBAT,
         LOG_WIFI_CONTROL, MAX_RPM_RAMP_RATE, MIN_ATTACK_RPM, MIN_MOVE_RPM, MOVEMENT_SPEED_ATTACK,
         MOVEMENT_SPEED_CENTER, REVERSE_ROTATION_MAX_RPM, RPM_INITIAL_JUMP, TARGET_RPM,
+        TARGET_RPM_BASE_VOLTAGE, TARGET_RPM_DERATE_PER_VOLT,
     };
     #[cfg(target_os = "none")]
     use alloc::vec::Vec;
@@ -525,8 +528,12 @@ pub mod kasari {
                 self.reverse_rotation = !self.reverse_rotation;
             }
 
+            let unfiltered_target_rotation_speed = TARGET_RPM
+                - (TARGET_RPM_BASE_VOLTAGE - self.vbat)
+                    * TARGET_RPM_DERATE_PER_VOLT
+                    * if self.reverse_rotation { -1.0 } else { 1.0 };
             self.target.rotation_speed =
-                TARGET_RPM * if self.reverse_rotation { -1.0 } else { 1.0 };
+                0.95 * self.target.rotation_speed + 0.05 * unfiltered_target_rotation_speed;
 
             if fabsf(self.detector.rpm) >= MIN_MOVE_RPM {
                 let (x, y) = self.compute_autonomous_movement(ts);
