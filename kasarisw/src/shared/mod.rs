@@ -28,7 +28,7 @@ pub const MOVEMENT_SPEED_CENTER: f32 = 1.3;
 pub const MOVEMENT_SPEED_ATTACK: f32 = 1.3;
 
 pub const MAX_RPM_RAMP_RATE: f32 = 1500.0; // rpm/s
-pub const RPM_INITIAL_JUMP: f32 = 400.0; // rpm
+pub const RPM_INITIAL_JUMP: f32 = 600.0; // rpm
 
 pub const FAILSAFE_TIMEOUT_US: u64 = 5_000_000;
 
