@@ -152,7 +152,7 @@ static LAST_HIGH_RPM_TS: AtomicU32 = AtomicU32::new(0);
 
 static FLASH_STORAGE: StaticCell<Mutex<RefCell<FlashStorage>>> = StaticCell::new();
 
-const PANIC_OFFSET: u32 = 0x200000;
+const PANIC_OFFSET: u32 = 0x2ff000;
 const PANIC_SIZE: u32 = 0x1000;
 
 static mut FLASH_STORAGE_REF: Option<&'static Mutex<RefCell<FlashStorage>>> = None;
