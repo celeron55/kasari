@@ -290,6 +290,7 @@ pub struct SimEventSource {
     next_accel_ts: u64,
     next_lidar_ts: u64,
     last_lidar_ts: u64,
+    next_wifi_ts: u64,
     lidar_distance_offset: f32,
     debug: bool,
     accelerometer_event_count: u64,
@@ -346,6 +347,7 @@ impl SimEventSource {
             next_accel_ts: 10_000,
             next_lidar_ts: 2083,
             last_lidar_ts: 0,
+            next_wifi_ts: 100_000,
             lidar_distance_offset,
             debug,
             accelerometer_event_count: 0,
@@ -406,6 +408,7 @@ impl SimEventSource {
             let next_vbat = self.next_vbat_ts;
             let next_accel = self.next_accel_ts;
             let next_lidar = self.next_lidar_ts;
+            let next_wifi = self.next_wifi_ts;
             let next_step = self.last_step_ts + 20_000;
 
             let next_ts = [next_vbat, next_accel, next_lidar, next_step, target_ts + 1]
@@ -431,7 +434,8 @@ impl SimEventSource {
                 let omega = (self.robot.rpm / 60.0 * 2.0 * PI).abs();
                 let a_g = (omega * omega * 0.0155) / 9.81;
                 // Allow calibration during the first 50 samples
-                let ay = if next_ts <= 500_000 { 0.0 } else { a_g };
+                // Add bias similarly to what the real hardware has
+                let ay = if next_ts <= 500_000 { 0.0 } else { a_g } + 3.4;
                 // Simulate gravity plus noise
                 let range = Uniform::from(-4.0..4.0);
                 let az = 1.0 + self.rng.sample(&range);
@@ -488,6 +492,13 @@ impl SimEventSource {
                 self.control_logic.feed_event(event);
                 self.last_lidar_ts = next_lidar;
                 self.next_lidar_ts += 2083;
+            }
+
+            if next_wifi <= next_ts {
+                let event = InputEvent::WifiControl(next_wifi, 2, 0.0, 0.0, 0.0);
+                self.event_buffer.push_back(event.clone());
+                self.control_logic.feed_event(event);
+                self.next_wifi_ts += 100_000;
             }
 
             if next_step <= next_ts {
