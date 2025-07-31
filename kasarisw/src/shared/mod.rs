@@ -762,7 +762,7 @@ pub mod kasari {
             }
 
             if let Some(reset_ts) = self.reset_start_ts {
-                if timestamp - reset_ts < 2_000_000 {
+                if timestamp as i64 - (reset_ts as i64) < 2_000_000 {
                     let reset_plan = MotorControlPlan {
                         timestamp,
                         rotation_speed: 0.0,
