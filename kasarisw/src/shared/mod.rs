@@ -535,14 +535,6 @@ pub mod kasari {
             self.target.rotation_speed =
                 0.95 * self.target.rotation_speed + 0.05 * unfiltered_target_rotation_speed;
 
-            // Limit target rotation speed to be within 500 RPM of measured RPM
-            let measured_abs = self.detector.rpm.abs();
-            let sign = self.target.rotation_speed.signum();
-            let measured_signed = sign * measured_abs;
-            let low = measured_signed - 500.0;
-            let high = measured_signed + 500.0;
-            self.target.rotation_speed = self.target.rotation_speed.max(low).min(high);
-
             if fabsf(self.detector.rpm) >= MIN_MOVE_RPM {
                 let (x, y) = self.compute_autonomous_movement(ts);
                 self.target.movement_x = x;
