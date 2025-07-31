@@ -226,6 +226,7 @@ pub mod kasari {
         last_wifi_r: f32,
         last_wifi_m: f32,
         last_wifi_t: f32,
+        last_publish_ts: u64,
     }
 
     impl MainLogic {
@@ -274,6 +275,7 @@ pub mod kasari {
                 last_wifi_r: 0.0,
                 last_wifi_m: 0.0,
                 last_wifi_t: 0.0,
+                last_publish_ts: 0,
             }
         }
 
@@ -716,29 +718,6 @@ pub mod kasari {
 
             self.control_rpm(timestamp);
 
-            if !self.vbat_ok {
-                self.motor_control_plan = None;
-            } else {
-                let plan = MotorControlPlan {
-                    timestamp,
-                    rotation_speed: self.current_rotation_speed,
-                    movement_x: self.target.movement_x,
-                    movement_y: self.target.movement_y,
-                };
-                self.motor_control_plan = Some(plan);
-                if let Some(ref publisher) = publisher {
-                    publisher.publish_immediate(InputEvent::Planner(
-                        timestamp,
-                        plan,
-                        self.detection_state.closest_wall,
-                        self.detection_state.open_space,
-                        self.detection_state.object_pos,
-                        self.detector.theta,
-                        self.detector.rpm,
-                    ));
-                }
-            }
-
             // Motor controller reset logic
             if let Some(plan) = &self.motor_control_plan {
                 let target_rpm_abs = plan.rotation_speed.abs();
@@ -759,21 +738,48 @@ pub mod kasari {
                 } else {
                     self.low_rpm_start_ts = None;
                 }
+            } else {
+                self.low_rpm_start_ts = None;
             }
 
-            if let Some(reset_ts) = self.reset_start_ts {
-                if timestamp as i64 - (reset_ts as i64) < 2_000_000 {
-                    let reset_plan = MotorControlPlan {
+            let is_in_reset = self.reset_start_ts.is_some() && (timestamp as i64 - self.reset_start_ts.unwrap() as i64) < 2_000_000;
+
+            let plan_opt: Option<MotorControlPlan> = if is_in_reset {
+                self.current_rotation_speed = 0.0;
+                if debug {
+                    println!("Motor controller reset in progress at ts={}", timestamp);
+                }
+                Some(MotorControlPlan {
+                    timestamp,
+                    rotation_speed: 0.0,
+                    movement_x: 0.0,
+                    movement_y: 0.0,
+                })
+            } else {
+                if self.reset_start_ts.is_some() {
+                    self.reset_start_ts = None;
+                }
+                if !self.vbat_ok {
+                    None
+                } else {
+                    Some(MotorControlPlan {
                         timestamp,
-                        rotation_speed: 0.0,
-                        movement_x: 0.0,
-                        movement_y: 0.0,
-                    };
-                    self.motor_control_plan = Some(reset_plan.clone());
+                        rotation_speed: self.current_rotation_speed,
+                        movement_x: self.target.movement_x,
+                        movement_y: self.target.movement_y,
+                    })
+                }
+            };
+
+            self.motor_control_plan = plan_opt.clone();
+
+            if let Some(plan) = plan_opt {
+                if timestamp as i64 - self.last_publish_ts as i64 >= 50_000 {
+                    self.last_publish_ts = timestamp;
                     if let Some(ref publisher) = publisher {
                         publisher.publish_immediate(InputEvent::Planner(
                             timestamp,
-                            reset_plan,
+                            plan,
                             self.detection_state.closest_wall,
                             self.detection_state.open_space,
                             self.detection_state.object_pos,
@@ -781,12 +787,6 @@ pub mod kasari {
                             self.detector.rpm,
                         ));
                     }
-                    self.current_rotation_speed = 0.0;
-                    if debug {
-                        println!("Motor controller reset in progress at ts={}", timestamp);
-                    }
-                } else {
-                    self.reset_start_ts = None;
                 }
             }
 
