@@ -108,6 +108,10 @@ impl ObjectDetector {
                 let raw_accel_y = *ay;
                 self.smoothed_accel_y = 0.2 * raw_accel_y + 0.8 * self.smoothed_accel_y;
 
+                // Hardcoded Y calibration for combat
+                self.accel_offset = 3.4;
+                self.calibration_done = true;
+
                 // Calibrate Y
                 if !self.calibration_done {
                     if CALIBRATION_MIN_G <= raw_accel_y && raw_accel_y <= CALIBRATION_MAX_G {
