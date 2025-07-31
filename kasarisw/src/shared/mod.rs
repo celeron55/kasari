@@ -24,8 +24,8 @@ pub const MIN_MOVE_RPM: f32 = 550.0;
 pub const MIN_ATTACK_RPM: f32 = 800.0;
 pub const REVERSE_ROTATION_MAX_RPM: f32 = 80.0;
 
-pub const MOVEMENT_SPEED_CENTER: f32 = 1.3;
-pub const MOVEMENT_SPEED_ATTACK: f32 = 1.3;
+pub const MOVEMENT_SPEED_CENTER: f32 = 1.0;
+pub const MOVEMENT_SPEED_ATTACK: f32 = 1.0;
 
 pub const MAX_RPM_RAMP_RATE: f32 = 1500.0; // rpm/s
 pub const RPM_INITIAL_JUMP: f32 = 600.0; // rpm
@@ -479,8 +479,8 @@ pub mod kasari {
                 let v_factor = 10.0;
                 let velocity_diff_x = intended_x * v_factor - self.detection_state.velocity.0;
                 let velocity_diff_y = intended_y * v_factor - self.detection_state.velocity.1;
-                let gain = 0.3;
-                let max = 0.7;
+                let gain = 0.5;
+                let max = 0.5;
                 let adjust_x = (velocity_diff_x * gain).max(-max).min(max);
                 let adjust_y = (velocity_diff_y * gain).max(-max).min(max);
                 /*println!(
