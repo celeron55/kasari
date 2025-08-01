@@ -84,7 +84,7 @@ class SensorGUI:
         
         # Connection controls
         ttk.Label(self.frame, text="Host:Port:").grid(row=0, column=0, sticky=tk.W)
-        self.host_entry = ttk.Combobox(self.frame, values=["192.168.2.1:8080", "192.168.1.248:8080"])
+        self.host_entry = ttk.Combobox(self.frame, values=["192.168.2.1:8080", "192.168.1.248:8080", "127.0.0.1:8080"])
         self.host_entry.set("192.168.2.1:8080")
         self.host_entry.grid(row=0, column=1, sticky=tk.W)
         
