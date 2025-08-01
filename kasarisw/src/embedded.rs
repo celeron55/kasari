@@ -57,6 +57,7 @@ mod sensors;
 mod shared;
 
 use shared::kasari;
+use kasari::InputEvent;
 
 const SSID: &str = env!("SSID");
 const PASSWORD: &str = env!("PASSWORD");
@@ -874,6 +875,12 @@ async fn listener_task(
     let mut ap_socket = TcpSocket::new(ap_stack, &mut ap_rx_buffer, &mut ap_tx_buffer);
     let mut sta_socket = TcpSocket::new(sta_stack, &mut sta_rx_buffer, &mut sta_tx_buffer);
 
+    let mut limit_streaming = false;
+    let mut last_lidar_sent: u64 = 0;
+    let mut last_accel_sent: u64 = 0;
+    const LIDAR_INTERVAL_US: u64 = 500_000; // 2 per second
+    const ACCEL_INTERVAL_US: u64 = 500_000; // 2 per second
+
     loop {
         println!("Wait for connection...");
         let either = select(
@@ -903,7 +910,6 @@ async fn listener_task(
 
         let mut rx_buffer = [0u8; 512];
         let mut rx_pos = 0;
-        //let mut serialized_event_count: u32 = 0; // Instrumentation
 
         loop {
             let read_fut = socket.read(&mut rx_buffer[rx_pos..]);
@@ -911,17 +917,41 @@ async fn listener_task(
 
             match select(read_fut, event_fut).await {
                 Either::Second(event) => {
-                    let serialized = kasari::serialize_event(&event);
-                    /*serialized_event_count += 1;
-                    if serialized_event_count % 20 == 0 {
-                        println!("-!- serialized_event_count = {}", serialized_event_count);
-                    }*/
-                    if let Err(e) = socket.write_all(&serialized).await {
-                        println!("Write error: {:?}", e);
-                        break;
+                    let should_send = if limit_streaming {
+                        match &event {
+                            InputEvent::Lidar(..) => {
+                                let ts = event.timestamp();
+                                if ts >= last_lidar_sent + LIDAR_INTERVAL_US {
+                                    last_lidar_sent = ts;
+                                    true
+                                } else {
+                                    false
+                                }
+                            }
+                            InputEvent::Accelerometer(..) => {
+                                let ts = event.timestamp();
+                                if ts >= last_accel_sent + ACCEL_INTERVAL_US {
+                                    last_accel_sent = ts;
+                                    true
+                                } else {
+                                    false
+                                }
+                            }
+                            _ => true,
+                        }
+                    } else {
+                        true
+                    };
+
+                    if should_send {
+                        let serialized = kasari::serialize_event(&event);
+                        if let Err(e) = socket.write_all(&serialized).await {
+                            println!("Write error: {:?}", e);
+                            break;
+                        }
+                        // Don't flush here. Events are too small and throughput
+                        // will be severely limited.
                     }
-                    // Don't flush here. Events are too small and throughput
-                    // will be severely limited.
                 }
                 Either::First(Ok(0)) => {
                     println!("Client disconnected");
@@ -942,6 +972,9 @@ async fn listener_task(
                                 let r = f32::from_le_bytes(rx_buffer[10..14].try_into().unwrap());
                                 let m = f32::from_le_bytes(rx_buffer[14..18].try_into().unwrap());
                                 let t = f32::from_le_bytes(rx_buffer[18..22].try_into().unwrap());
+
+                                limit_streaming = mode == 3;
+
                                 // Use local timestamp in order to make all
                                 // event log timestamps have the same local
                                 // timebase

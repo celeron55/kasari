@@ -416,14 +416,25 @@ impl SimEventSource {
             let next_vbat = self.next_vbat_ts;
             let next_accel = self.next_accel_ts;
             let next_lidar = self.next_lidar_ts;
-            let next_wifi = if self.auto_inject_wifi { self.next_wifi_ts } else { u64::MAX };
+            let next_wifi = if self.auto_inject_wifi {
+                self.next_wifi_ts
+            } else {
+                u64::MAX
+            };
             let next_step = self.last_step_ts + 20_000;
 
-            let next_ts = [next_vbat, next_accel, next_lidar, next_wifi, next_step, target_ts + 1]
-                .iter()
-                .cloned()
-                .min()
-                .unwrap();
+            let next_ts = [
+                next_vbat,
+                next_accel,
+                next_lidar,
+                next_wifi,
+                next_step,
+                target_ts + 1,
+            ]
+            .iter()
+            .cloned()
+            .min()
+            .unwrap();
 
             // Advance physics
             let dt = (next_ts - self.last_advance_ts) as f32 / 1_000_000.0;

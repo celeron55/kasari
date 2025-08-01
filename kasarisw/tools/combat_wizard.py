@@ -364,11 +364,14 @@ class CombatWizard:
     def step_battle_mode(self):
         style = ttk.Style()
         style.configure('Large.TButton', font=('Helvetica', 20), padding=10)
+
+        self.limited_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(self.workflow_frame, text="Limited Streaming", variable=self.limited_var).grid(row=0, column=0, sticky=tk.W)
         
         self.autonomous_button = ttk.Button(self.workflow_frame, text="Autonomous Mode: OFF", command=self.toggle_autonomous, style='Large.TButton')
-        self.autonomous_button.grid(row=0, column=0, sticky=tk.NSEW, pady=10)
-        
-        ttk.Button(self.workflow_frame, text="End Match", command=self.end_match).grid(row=1, column=0, sticky=tk.W)
+        self.autonomous_button.grid(row=1, column=0, sticky=tk.NSEW, pady=10)
+
+        ttk.Button(self.workflow_frame, text="End Match", command=self.end_match).grid(row=2, column=0, sticky=tk.W)
 
     def toggle_autonomous(self):
         self.autonomous_active = not self.autonomous_active
@@ -760,12 +763,8 @@ class CombatWizard:
         
         if self.sock:
             ts = int(time.time() * 1000000)
-            if self.autonomous_active:
-                mode = 2
-                r = m = t = 0.0
-            else:
-                mode = 0
-                r = m = t = 0.0
+            mode = 3 if self.autonomous_active and self.limited_var.get() else 2 if self.autonomous_active else 0
+            r = m = t = 0.0
             event = ('WifiControl', ts, mode, r, m, t)
             try:
                 serialized = self.serialize_event(event)

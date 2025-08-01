@@ -5,6 +5,7 @@ use crate::sources::EventSource;
 use crate::sources::FileEventSource;
 use crate::sources::SimEventSource;
 use core::f32::consts::PI;
+use crossbeam_channel::{Receiver, Sender};
 use eframe::egui::{self, TextStyle};
 use egui_plot::{Line, Plot, PlotBounds, PlotPoints};
 use kasarisw::shared::algorithm::{BIN_ANGLE_STEP, NUM_BINS};
@@ -12,7 +13,6 @@ use kasarisw::shared::kasari::{InputEvent, MainLogic, MotorControlPlan};
 use num_traits::ops::euclid::Euclid;
 use std::io::Error as IoError;
 use std::time::Instant;
-use crossbeam_channel::{Sender, Receiver};
 
 pub struct MyApp {
     pub event_source: Box<dyn EventSource>,
@@ -237,7 +237,13 @@ impl eframe::App for MyApp {
 
         if let Some(rx) = &self.incoming_rx {
             while let Ok(mut event) = rx.try_recv() {
-                let current_ts = self.event_source.get_logic().unwrap().detector.last_ts.unwrap_or(0);
+                let current_ts = self
+                    .event_source
+                    .get_logic()
+                    .unwrap()
+                    .detector
+                    .last_ts
+                    .unwrap_or(0);
                 if let InputEvent::WifiControl(_, mode, r, m, t) = event {
                     event = InputEvent::WifiControl(current_ts, mode, r, m, t);
                 }

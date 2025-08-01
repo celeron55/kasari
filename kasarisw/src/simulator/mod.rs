@@ -1,12 +1,12 @@
 use clap::Parser;
 use eframe::{self, egui};
+use kasarisw::shared::kasari::InputEvent;
 use std::error::Error;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Error as IoError};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use kasarisw::shared::kasari::InputEvent;
 
 mod app;
 mod events;
@@ -109,9 +109,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     );
 
     if args.listen {
-        use crossbeam_channel::{unbounded, Sender, Receiver};
+        use crossbeam_channel::{unbounded, Receiver, Sender};
         use std::io::{Read, Write};
-        use std::net::{TcpListener, Shutdown};
+        use std::net::{Shutdown, TcpListener};
         use std::sync::{Arc, Mutex};
         use std::thread;
 
@@ -126,18 +126,16 @@ fn main() -> Result<(), Box<dyn Error>> {
         // Broadcaster thread for outgoing events
         let current_conns_clone = current_conns.clone();
         let outgoing_rx_clone = outgoing_rx.clone();
-        thread::spawn(move || {
-            loop {
-                if let Ok(event) = outgoing_rx_clone.recv() {
-                    let serialized = kasarisw::shared::kasari::serialize_event(&event);
-                    let mut guard = current_conns_clone.lock().unwrap();
-                    let mut i = 0;
-                    while i < guard.len() {
-                        if guard[i].send(serialized.clone()).is_err() {
-                            guard.remove(i);
-                        } else {
-                            i += 1;
-                        }
+        thread::spawn(move || loop {
+            if let Ok(event) = outgoing_rx_clone.recv() {
+                let serialized = kasarisw::shared::kasari::serialize_event(&event);
+                let mut guard = current_conns_clone.lock().unwrap();
+                let mut i = 0;
+                while i < guard.len() {
+                    if guard[i].send(serialized.clone()).is_err() {
+                        guard.remove(i);
+                    } else {
+                        i += 1;
                     }
                 }
             }
@@ -172,16 +170,14 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }
                     // Sender sub-thread (per connection)
                     let mut write_socket = socket;
-                    thread::spawn(move || {
-                        loop {
-                            if let Ok(data) = conn_rx.recv() {
-                                if write_socket.write_all(&data).is_err() {
-                                    break;
-                                }
-                                let _ = write_socket.flush();
-                            } else {
+                    thread::spawn(move || loop {
+                        if let Ok(data) = conn_rx.recv() {
+                            if write_socket.write_all(&data).is_err() {
                                 break;
                             }
+                            let _ = write_socket.flush();
+                        } else {
+                            break;
                         }
                     });
                     // Receiver sub-thread (per connection)
@@ -197,11 +193,19 @@ fn main() -> Result<(), Box<dyn Error>> {
                                         let tag = buf[0];
                                         if tag == 4 {
                                             if rx_pos >= 22 {
-                                                let _ts_orig = u64::from_le_bytes(buf[1..9].try_into().unwrap());
+                                                let _ts_orig = u64::from_le_bytes(
+                                                    buf[1..9].try_into().unwrap(),
+                                                );
                                                 let mode = buf[9];
-                                                let r = f32::from_le_bytes(buf[10..14].try_into().unwrap());
-                                                let m = f32::from_le_bytes(buf[14..18].try_into().unwrap());
-                                                let t = f32::from_le_bytes(buf[18..22].try_into().unwrap());
+                                                let r = f32::from_le_bytes(
+                                                    buf[10..14].try_into().unwrap(),
+                                                );
+                                                let m = f32::from_le_bytes(
+                                                    buf[14..18].try_into().unwrap(),
+                                                );
+                                                let t = f32::from_le_bytes(
+                                                    buf[18..22].try_into().unwrap(),
+                                                );
                                                 let ts = 0; // Ignored in logic
                                                 let event = kasarisw::shared::kasari::InputEvent::WifiControl(ts, mode, r, m, t);
                                                 let _ = incoming_tx_c.send(event);

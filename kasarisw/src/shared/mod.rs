@@ -133,8 +133,22 @@ pub mod kasari {
         fn from(value: u8) -> Self {
             match value {
                 1 => Self::ManualWifi,
-                2 => Self::Autonomous,
+                2 | 3 => Self::Autonomous,
                 _ => Self::RcReceiver,
+            }
+        }
+    }
+
+    impl InputEvent {
+        pub fn timestamp(&self) -> u64 {
+            match self {
+                Self::Lidar(ts, ..) => *ts,
+                Self::Accelerometer(ts, ..) => *ts,
+                Self::Receiver(ts, ..) => *ts,
+                Self::Vbat(ts, ..) => *ts,
+                Self::WifiControl(ts, ..) => *ts,
+                Self::Planner(ts, ..) => *ts,
+                Self::Stats(ts, ..) => *ts,
             }
         }
     }
