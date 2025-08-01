@@ -340,7 +340,17 @@ class CombatWizard:
         self.connect()
 
     def step_connecting(self):
-        ttk.Label(self.workflow_frame, text="Power on the robot and connect to its WiFi network.\nWaiting for connection...").grid(row=0, column=0, sticky=tk.W)
+        base_text = "Power on the robot and connect to its WiFi network.\nWaiting for connection..."
+        guidance = ""
+
+        if self.host == "192.168.2.1":
+            guidance = "\n\nTo connect to the robot's access point (AP mode):\n- SSID: kasarisw\n- No password\n- Set a static IP on your device: 192.168.2.2\n- Subnet mask: 255.255.255.0\n- Gateway: 192.168.2.1\n- DNS: 8.8.8.8 (optional)"
+        elif self.host == "127.0.0.1":
+            guidance = "\n\nThis is localhost (127.0.0.1). Ensure the simulator is running with the --listen flag enabled.\nStart the simulator in a terminal: ./target/debug/simulator --sim --listen"
+        else:
+            guidance = "\n\nThis is a custom IP (" + self.host + ")\n"
+
+        ttk.Label(self.workflow_frame, text=base_text + guidance).grid(row=0, column=0, sticky=tk.W)
 
     def step_prepare_arena(self):
         ttk.Label(self.workflow_frame, text="Remove the robot's safety covers and close the arena door.").grid(row=0, column=0, sticky=tk.W)
