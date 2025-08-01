@@ -236,6 +236,14 @@ fn main() -> Result<(), Box<dyn Error>> {
             for stream in listener.incoming() {
                 if let Ok(mut socket) = stream {
                     println!("New connection on 8081");
+                    let msg = "This was a simulator run (not a real panic)";
+                    let mut batch = vec![0u8; 4096];
+                    batch[0..4].copy_from_slice(&0xffffffffu32.to_le_bytes());
+                    let msg_bytes = msg.as_bytes();
+                    batch[4..4 + msg_bytes.len()].copy_from_slice(msg_bytes);
+                    if socket.write_all(&batch).is_ok() {
+                        let _ = socket.flush();
+                    }
                     let _ = socket.shutdown(Shutdown::Both);
                 }
             }
