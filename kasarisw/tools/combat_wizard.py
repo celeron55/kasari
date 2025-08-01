@@ -12,6 +12,16 @@ from datetime import datetime
 import argparse
 import sys
 
+# Graph constants
+GRAPH_WIDTH = 800
+GRAPH_HEIGHT = 300
+GRAPH_MARGIN_LEFT = 120
+GRAPH_MARGIN_BOTTOM = 40
+GRAPH_MARGIN_TOP = 20
+GRAPH_MARGIN_RIGHT = 10
+GRAPH_TICK_LENGTH = 5
+GRAPH_LABEL_OFFSET = 10
+
 # Shared queues for events and status (thread-safe)
 event_queue = queue.Queue()
 status_queue = queue.Queue()
@@ -91,7 +101,7 @@ def parse_event(buffer):
         print(f"Skipped byte (invalid tag peek): {buffer[0]:02x}", file=sys.stderr)
         return None, buffer[1:]
 
-def process_events(event_buffer, current_log, last_ts, n, timestamp_str, total_events):
+def process_events(event_buffer, current_log, last_ts, n, timestamp_str, total_events, log_dir):
     while len(event_buffer) > 0:
         old_len = len(event_buffer)
         event, event_buffer = parse_event(event_buffer)
@@ -105,7 +115,7 @@ def process_events(event_buffer, current_log, last_ts, n, timestamp_str, total_e
                 current_log = None
 
             if current_log is None:
-                log_path = f"log/kasarisw_{timestamp_str}_{n}.log"
+                log_path = f"{log_dir}/kasarisw_{timestamp_str}_{n}.log"
                 current_log = open(log_path, 'w')
                 print(f"Starting new log file: {log_path}")
 
@@ -121,7 +131,7 @@ def process_events(event_buffer, current_log, last_ts, n, timestamp_str, total_e
 BATCH_FLUSH_SIZE = 4096
 BATCH_DATA_SIZE = BATCH_FLUSH_SIZE - 4
 
-def download_logs(host, timestamp_str):
+def download_logs(host, timestamp_str, log_dir):
     port = 8081
     sock = None
     for attempt in range(60):
@@ -137,7 +147,7 @@ def download_logs(host, timestamp_str):
             time.sleep(1)
     else:
         print("Failed to connect for download after 60 attempts.")
-        return []
+        return [], []
 
     batch_buffer = b''
     event_buffer = b''
@@ -145,11 +155,12 @@ def download_logs(host, timestamp_str):
     total_events = 0
     last_progress = time.time()
 
-    os.makedirs('log', exist_ok=True)
+    os.makedirs(log_dir, exist_ok=True)
     n = 1
     current_log = None
     last_ts = None
     log_files = []
+    panics = []
 
     while True:
         chunk = sock.recv(4096)
@@ -172,6 +183,15 @@ def download_logs(host, timestamp_str):
                 print("---")
                 print("PANIC:", msg)
                 print("---")
+                panics.append(msg)
+                if current_log is None:
+                    log_path = f"{log_dir}/kasarisw_{timestamp_str}_{n}.log"
+                    current_log = open(log_path, 'w')
+                    print(f"Starting new log file: {log_path}")
+                    log_files.append(log_path)
+                json.dump(['Panic', int(time.time() * 1000000), msg], current_log)
+                current_log.write('\n')
+                current_log.flush()
                 batch_buffer = batch_buffer[BATCH_FLUSH_SIZE:]
                 continue
             data = batch[4:]
@@ -179,15 +199,15 @@ def download_logs(host, timestamp_str):
             batch_buffer = batch_buffer[BATCH_FLUSH_SIZE:]
 
             event_buffer, current_log, last_ts, n, total_events = process_events(
-                event_buffer, current_log, last_ts, n, timestamp_str, total_events
+                event_buffer, current_log, last_ts, n, timestamp_str, total_events, log_dir
             )
-            if current_log:
+            if current_log and current_log.name not in log_files:
                 log_files.append(current_log.name)
 
     event_buffer, current_log, last_ts, n, total_events = process_events(
-        event_buffer, current_log, last_ts, n, timestamp_str, total_events
+        event_buffer, current_log, last_ts, n, timestamp_str, total_events, log_dir
     )
-    if current_log:
+    if current_log and current_log.name not in log_files:
         log_files.append(current_log.name)
 
     if len(event_buffer) > 0:
@@ -195,7 +215,7 @@ def download_logs(host, timestamp_str):
 
     sock.close()
     print(f"Download complete. Total bytes: {total_bytes}, total events: {total_events}")
-    return log_files
+    return log_files, panics
 
 class CombatWizard:
     def __init__(self, root):
@@ -217,7 +237,6 @@ class CombatWizard:
         self.autonomous_active = False
         
         self.timestamp_str = datetime.now().strftime('%Y-%m-%d_%H%M%S')
-        os.makedirs('log', exist_ok=True)
         self.realtime_log_path = None
         self.log_file = None
         
@@ -225,6 +244,10 @@ class CombatWizard:
         
         self.events = []
         self.match_stats = {}
+        self.rpm_data = []
+        self.vbat_data = []
+        self.events_per_sec = defaultdict(int)
+        self.panics = []
         
         self.create_widgets()
         
@@ -295,6 +318,8 @@ class CombatWizard:
         elif self.step == 5:
             self.step_downloading()
         elif self.step == 6:
+            self.status_frame.grid_remove()
+            self.workflow_frame.grid(row=0, rowspan=2, sticky=(tk.N, tk.S, tk.E, tk.W))
             self.step_final_stats()
 
     def step_choose_address(self):
@@ -307,6 +332,8 @@ class CombatWizard:
 
     def start_connect(self):
         self.host = self.host_entry.get()
+        self.log_dir = 'sim_log' if self.host == '127.0.0.1' else 'log'
+        os.makedirs(self.log_dir, exist_ok=True)
         self.host_port = f"{self.host}:8080"
         self.step = 2
         self.update_workflow()
@@ -354,6 +381,9 @@ class CombatWizard:
         threading.Thread(target=self.perform_download, daemon=True).start()
 
     def compute_stats(self):
+        self.rpm_data = []
+        self.vbat_data = []
+        self.events_per_sec = defaultdict(int)
         if not self.events:
             self.match_stats = {
                 'duration': 0,
@@ -368,14 +398,29 @@ class CombatWizard:
         last_ts = self.events[-1][1]
         duration = (last_ts - first_ts) / 1_000_000.0
         
-        rpms = [event[12] for event in self.events if event[0] == 'Planner']
-        avg_rpm = sum(rpms) / len(rpms) if rpms else 0
+        rpms = []
+        vbats = []
+        num_lidar = 0
         
-        vbats = [event[2] for event in self.events if event[0] == 'Vbat']
+        for event in self.events:
+            rel_ts = (event[1] - first_ts) / 1_000_000.0
+            bin_sec = int(rel_ts)
+            self.events_per_sec[bin_sec] += 1
+            
+            if event[0] == 'Planner':
+                rpm = event[12]
+                rpms.append(rpm)
+                self.rpm_data.append((rel_ts, rpm))
+            elif event[0] == 'Vbat':
+                voltage = event[2]
+                vbats.append(voltage)
+                self.vbat_data.append((rel_ts, voltage))
+            elif event[0] == 'Lidar':
+                num_lidar += 1
+        
+        avg_rpm = sum(rpms) / len(rpms) if rpms else 0
         min_vbat = min(vbats) if vbats else 0
         max_vbat = max(vbats) if vbats else 0
-        
-        num_lidar = sum(1 for event in self.events if event[0] == 'Lidar')
         
         self.match_stats = {
             'duration': duration,
@@ -386,8 +431,9 @@ class CombatWizard:
         }
 
     def perform_download(self):
-        log_files = download_logs(self.host, self.timestamp_str)
+        log_files, panics = download_logs(self.host, self.timestamp_str, self.log_dir)
         self.log_files = [self.realtime_log_path] + log_files if self.realtime_log_path else log_files
+        self.panics = panics
         self.step = 6
         self.root.after(0, self.update_workflow)
 
@@ -395,25 +441,170 @@ class CombatWizard:
         ttk.Label(self.workflow_frame, text="Downloading logs...").grid(row=0, column=0, sticky=tk.W)
 
     def step_final_stats(self):
-        ttk.Label(self.workflow_frame, text="Match Complete. Log files:").grid(row=0, column=0, sticky=tk.W)
-        for i, file in enumerate(self.log_files or []):
-            ttk.Label(self.workflow_frame, text=file).grid(row=i+1, column=0, sticky=tk.W)
+        canvas = tk.Canvas(self.workflow_frame)
+        scrollbar = ttk.Scrollbar(self.workflow_frame, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
+        canvas.grid(row=0, column=0, sticky=(tk.N, tk.S, tk.E, tk.W))
+        self.workflow_frame.rowconfigure(0, weight=1)
+        self.workflow_frame.columnconfigure(0, weight=1)
         
-        row = len(self.log_files or []) + 1
-        ttk.Label(self.workflow_frame, text="Statistics:").grid(row=row, column=0, sticky=tk.W)
+        inner_frame = ttk.Frame(canvas)
+        canvas.create_window((0,0), window=inner_frame, anchor="nw")
+        
+        def _on_frame_configure(event):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+        inner_frame.bind("<Configure>", _on_frame_configure)
+        
+        row = 0
+        ttk.Label(inner_frame, text="Match Complete. Log files:").grid(row=row, column=0, sticky=tk.W)
         row += 1
-        ttk.Label(self.workflow_frame, text=f"Match Duration: {self.match_stats['duration']:.2f} seconds").grid(row=row, column=0, sticky=tk.W)
+        for file in self.log_files or []:
+            ttk.Label(inner_frame, text=file).grid(row=row, column=0, sticky=tk.W)
+            row += 1
+        
+        ttk.Label(inner_frame, text="Statistics:").grid(row=row, column=0, sticky=tk.W)
         row += 1
-        ttk.Label(self.workflow_frame, text=f"Average RPM: {self.match_stats['avg_rpm']:.2f}").grid(row=row, column=0, sticky=tk.W)
+        ttk.Label(inner_frame, text=f"Match Duration: {self.match_stats['duration']:.2f} seconds").grid(row=row, column=0, sticky=tk.W)
         row += 1
-        ttk.Label(self.workflow_frame, text=f"Min Battery Voltage: {self.match_stats['min_vbat']:.2f} V").grid(row=row, column=0, sticky=tk.W)
+        ttk.Label(inner_frame, text=f"Average RPM: {self.match_stats['avg_rpm']:.2f}").grid(row=row, column=0, sticky=tk.W)
         row += 1
-        ttk.Label(self.workflow_frame, text=f"Max Battery Voltage: {self.match_stats['max_vbat']:.2f} V").grid(row=row, column=0, sticky=tk.W)
+        ttk.Label(inner_frame, text=f"Min Battery Voltage: {self.match_stats['min_vbat']:.2f} V").grid(row=row, column=0, sticky=tk.W)
         row += 1
-        ttk.Label(self.workflow_frame, text=f"Number of LIDAR Events: {self.match_stats['num_lidar']}").grid(row=row, column=0, sticky=tk.W)
+        ttk.Label(inner_frame, text=f"Max Battery Voltage: {self.match_stats['max_vbat']:.2f} V").grid(row=row, column=0, sticky=tk.W)
+        row += 1
+        ttk.Label(inner_frame, text=f"Number of LIDAR Events: {self.match_stats['num_lidar']}").grid(row=row, column=0, sticky=tk.W)
+        row += 1
+        
+        if self.panics:
+            ttk.Label(inner_frame, text="Panics:", foreground="red").grid(row=row, column=0, sticky=tk.W)
+            row += 1
+            for panic in self.panics:
+                ttk.Label(inner_frame, text=panic, foreground="red").grid(row=row, column=0, sticky=tk.W)
+                row += 1
+        
+        ttk.Label(inner_frame, text="RPM over time:").grid(row=row, column=0, sticky=tk.W)
+        row += 1
+        rpm_canvas = tk.Canvas(inner_frame, width=GRAPH_WIDTH, height=GRAPH_HEIGHT, bg="white")
+        rpm_canvas.grid(row=row, column=0, sticky=tk.W)
+        self.plot_line(rpm_canvas, self.rpm_data, "blue")
+        row += 1
+        
+        ttk.Label(inner_frame, text="Vbat over time:").grid(row=row, column=0, sticky=tk.W)
+        row += 1
+        vbat_canvas = tk.Canvas(inner_frame, width=GRAPH_WIDTH, height=GRAPH_HEIGHT, bg="white")
+        vbat_canvas.grid(row=row, column=0, sticky=tk.W)
+        self.plot_line(vbat_canvas, self.vbat_data, "red")
+        row += 1
+        
+        ttk.Label(inner_frame, text="Events per second:").grid(row=row, column=0, sticky=tk.W)
+        row += 1
+        events_canvas = tk.Canvas(inner_frame, width=GRAPH_WIDTH, height=GRAPH_HEIGHT, bg="white")
+        events_canvas.grid(row=row, column=0, sticky=tk.W)
+        self.plot_events(events_canvas)
+        row += 1
+
+    def plot_line(self, canvas, data, color):
+        if not data:
+            canvas.create_text(GRAPH_WIDTH / 2, GRAPH_HEIGHT / 2, text=f"No data")
+            return
+        
+        data = sorted(data)
+        times = [t for t, v in data]
+        values = [v for t, v in data]
+        min_t = 0
+        max_t = self.match_stats['duration']
+        min_v = min(values) if values else 0
+        max_v = max(values) if values else 0
+        if min_v == max_v:
+            min_v -= 1
+            max_v += 1
+        
+        height = GRAPH_HEIGHT
+        width = GRAPH_WIDTH
+        margin_left = GRAPH_MARGIN_LEFT
+        margin_bottom = GRAPH_MARGIN_BOTTOM
+        margin_top = GRAPH_MARGIN_TOP
+        margin_right = GRAPH_MARGIN_RIGHT
+        plot_w = width - margin_left - margin_right
+        plot_h = height - margin_bottom - margin_top
+        
+        # Axes
+        canvas.create_line(margin_left, height - margin_bottom, width - margin_right, height - margin_bottom)
+        canvas.create_line(margin_left, height - margin_bottom, margin_left, margin_top)
+        
+        # X labels
+        for i in range(5):
+            x = margin_left + i * plot_w / 4
+            t = min_t + i * (max_t - min_t) / 4
+            canvas.create_text(x, height - margin_bottom + GRAPH_LABEL_OFFSET, text=f"{t:.0f}s")
+            canvas.create_line(x, height - margin_bottom, x, height - margin_bottom + GRAPH_TICK_LENGTH)
+        
+        # Y labels
+        for i in range(5):
+            y = height - margin_bottom - i * plot_h / 4
+            v = min_v + i * (max_v - min_v) / 4
+            canvas.create_text(margin_left - GRAPH_LABEL_OFFSET, y, text=f"{v:.1f}", anchor=tk.E)
+            canvas.create_line(margin_left - GRAPH_TICK_LENGTH, y, margin_left, y)
+        
+        # Data line
+        points = []
+        for t, v in data:
+            x = margin_left + (t - min_t) / (max_t - min_t) * plot_w if max_t > min_t else margin_left
+            y = height - margin_bottom - (v - min_v) / (max_v - min_v) * plot_h if max_v > min_v else height - margin_bottom
+            points.extend([x, y])
+        if points:
+            canvas.create_line(*points, fill=color)
+
+    def plot_events(self, canvas):
+        max_time = int(self.match_stats['duration']) + 1
+        counts = [self.events_per_sec.get(i, 0) for i in range(max_time)]
+        if not counts:
+            canvas.create_text(GRAPH_WIDTH / 2, GRAPH_HEIGHT / 2, text="No events data")
+            return
+        
+        min_c = 0
+        max_c = max(counts)
+        if max_c == 0:
+            max_c = 1
+        
+        height = GRAPH_HEIGHT
+        width = GRAPH_WIDTH
+        margin_left = GRAPH_MARGIN_LEFT
+        margin_bottom = GRAPH_MARGIN_BOTTOM
+        margin_top = GRAPH_MARGIN_TOP
+        margin_right = GRAPH_MARGIN_RIGHT
+        plot_w = width - margin_left - margin_right
+        plot_h = height - margin_bottom - margin_top
+        
+        # Axes
+        canvas.create_line(margin_left, height - margin_bottom, width - margin_right, height - margin_bottom)
+        canvas.create_line(margin_left, height - margin_bottom, margin_left, margin_top)
+        
+        # X labels
+        for i in range(5):
+            x = margin_left + i * plot_w / 4
+            t = i * (max_time) / 4
+            canvas.create_text(x, height - margin_bottom + GRAPH_LABEL_OFFSET, text=f"{t:.0f}s")
+            canvas.create_line(x, height - margin_bottom, x, height - margin_bottom + GRAPH_TICK_LENGTH)
+        
+        # Y labels
+        for i in range(5):
+            y = height - margin_bottom - i * plot_h / 4
+            v = min_c + i * (max_c - min_c) / 4
+            canvas.create_text(margin_left - GRAPH_LABEL_OFFSET, y, text=f"{v:.0f}", anchor=tk.E)
+            canvas.create_line(margin_left - GRAPH_TICK_LENGTH, y, margin_left, y)
+        
+        # Bars
+        bar_width = plot_w / max_time if max_time > 0 else 1
+        for i, c in enumerate(counts):
+            x1 = margin_left + i * bar_width
+            y1 = height - margin_bottom
+            y2 = y1 - (c - min_c) / (max_c - min_c) * plot_h if max_c > min_c else y1
+            canvas.create_rectangle(x1, y1, x1 + bar_width, y2, fill="green")
 
     def start_logging(self):
-        log_path = f"./log/kasarisw_{self.timestamp_str}.log"
+        log_path = f"./{self.log_dir}/kasarisw_{self.timestamp_str}.log"
         self.log_file = open(log_path, 'w')
 
     def connect(self):

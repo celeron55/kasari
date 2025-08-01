@@ -21,6 +21,7 @@ __pycache__
 
 # Logging directories
 log
+sim_log
 
 # ESP32 toolchain
 /export-esp.sh
