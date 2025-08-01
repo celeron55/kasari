@@ -6,6 +6,7 @@ use std::io::{self, BufRead, BufReader, Error as IoError};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use kasarisw::shared::kasari::InputEvent;
 
 mod app;
 mod events;
@@ -66,6 +67,9 @@ struct Args {
     /// Time at which simulation ends (seconds) (only applies in headless mode)
     #[arg(long)]
     end_time: Option<f32>,
+
+    #[arg(long)]
+    listen: bool,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -101,7 +105,142 @@ fn main() -> Result<(), Box<dyn Error>> {
         args.no_object,
         args.reverse_rotation,
         args.robot_flipped,
+        args.listen,
     );
+
+    if args.listen {
+        use crossbeam_channel::{unbounded, Sender, Receiver};
+        use std::io::{Read, Write};
+        use std::net::{TcpListener, Shutdown};
+        use std::sync::{Arc, Mutex};
+        use std::thread;
+
+        let (incoming_tx, incoming_rx): (Sender<InputEvent>, Receiver<InputEvent>) = unbounded();
+        let (outgoing_tx, outgoing_rx): (Sender<InputEvent>, Receiver<InputEvent>) = unbounded();
+
+        app.outgoing_tx = Some(outgoing_tx);
+        app.incoming_rx = Some(incoming_rx);
+
+        let current_conns: Arc<Mutex<Vec<Sender<Vec<u8>>>>> = Arc::new(Mutex::new(Vec::new()));
+
+        // Broadcaster thread for outgoing events
+        let current_conns_clone = current_conns.clone();
+        let outgoing_rx_clone = outgoing_rx.clone();
+        thread::spawn(move || {
+            loop {
+                if let Ok(event) = outgoing_rx_clone.recv() {
+                    let serialized = kasarisw::shared::kasari::serialize_event(&event);
+                    let mut guard = current_conns_clone.lock().unwrap();
+                    let mut i = 0;
+                    while i < guard.len() {
+                        if guard[i].send(serialized.clone()).is_err() {
+                            guard.remove(i);
+                        } else {
+                            i += 1;
+                        }
+                    }
+                }
+            }
+        });
+
+        // Listener thread for port 8080
+        let incoming_tx_clone = incoming_tx.clone();
+        thread::spawn(move || {
+            let listener = match TcpListener::bind("127.0.0.1:8080") {
+                Ok(l) => l,
+                Err(e) => {
+                    eprintln!("Failed to bind 8080: {}", e);
+                    return;
+                }
+            };
+            for stream in listener.incoming() {
+                if let Ok(socket) = stream {
+                    println!("New connection on 8080");
+                    let incoming_tx_c = incoming_tx_clone.clone();
+                    let mut read_socket = match socket.try_clone() {
+                        Ok(s) => s,
+                        Err(e) => {
+                            eprintln!("Socket clone failed: {}", e);
+                            continue;
+                        }
+                    };
+                    let current_conns_c = current_conns.clone();
+                    let (conn_tx, conn_rx) = unbounded::<Vec<u8>>();
+                    {
+                        let mut guard = current_conns_c.lock().unwrap();
+                        guard.push(conn_tx);
+                    }
+                    // Sender sub-thread (per connection)
+                    let mut write_socket = socket;
+                    thread::spawn(move || {
+                        loop {
+                            if let Ok(data) = conn_rx.recv() {
+                                if write_socket.write_all(&data).is_err() {
+                                    break;
+                                }
+                                let _ = write_socket.flush();
+                            } else {
+                                break;
+                            }
+                        }
+                    });
+                    // Receiver sub-thread (per connection)
+                    thread::spawn(move || {
+                        let mut buf = [0u8; 512];
+                        let mut rx_pos: usize = 0;
+                        loop {
+                            match read_socket.read(&mut buf[rx_pos..]) {
+                                Ok(0) => break,
+                                Ok(n) => {
+                                    rx_pos += n;
+                                    while rx_pos >= 1 {
+                                        let tag = buf[0];
+                                        if tag == 4 {
+                                            if rx_pos >= 22 {
+                                                let _ts_orig = u64::from_le_bytes(buf[1..9].try_into().unwrap());
+                                                let mode = buf[9];
+                                                let r = f32::from_le_bytes(buf[10..14].try_into().unwrap());
+                                                let m = f32::from_le_bytes(buf[14..18].try_into().unwrap());
+                                                let t = f32::from_le_bytes(buf[18..22].try_into().unwrap());
+                                                let ts = 0; // Ignored in logic
+                                                let event = kasarisw::shared::kasari::InputEvent::WifiControl(ts, mode, r, m, t);
+                                                let _ = incoming_tx_c.send(event);
+                                                buf.copy_within(22.., 0);
+                                                rx_pos -= 22;
+                                            } else {
+                                                break;
+                                            }
+                                        } else {
+                                            buf.copy_within(1.., 0);
+                                            rx_pos -= 1;
+                                        }
+                                    }
+                                }
+                                Err(_) => break,
+                            }
+                        }
+                    });
+                }
+            }
+        });
+
+        // Listener thread for port 8081 (dummy: accept and close)
+        thread::spawn(move || {
+            let listener = match TcpListener::bind("127.0.0.1:8081") {
+                Ok(l) => l,
+                Err(e) => {
+                    eprintln!("Failed to bind 8081: {}", e);
+                    return;
+                }
+            };
+            for stream in listener.incoming() {
+                if let Ok(mut socket) = stream {
+                    println!("New connection on 8081");
+                    let _ = socket.shutdown(Shutdown::Both);
+                }
+            }
+        });
+    }
 
     if args.headless {
         let running = Arc::new(AtomicBool::new(true));

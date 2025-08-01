@@ -12,6 +12,7 @@ use kasarisw::shared::kasari::{InputEvent, MainLogic, MotorControlPlan};
 use num_traits::ops::euclid::Euclid;
 use std::io::Error as IoError;
 use std::time::Instant;
+use crossbeam_channel::{Sender, Receiver};
 
 pub struct MyApp {
     pub event_source: Box<dyn EventSource>,
@@ -28,6 +29,8 @@ pub struct MyApp {
     latest_vbat: f32,
     show_planner_theta: bool,
     theta_offset: f32,
+    pub incoming_rx: Option<Receiver<InputEvent>>,
+    pub outgoing_tx: Option<Sender<InputEvent>>,
 }
 
 impl MyApp {
@@ -39,9 +42,10 @@ impl MyApp {
         sim_mode: bool,
         arena_width: f32,
         arena_height: f32,
-        object_present: bool,
+        no_object: bool,
         reverse_rotation: bool,
         robot_flipped: bool,
+        listen: bool,
     ) -> Self {
         let event_source: Box<dyn EventSource> = if sim_mode {
             Box::new(SimEventSource::new(
@@ -49,9 +53,10 @@ impl MyApp {
                 debug,
                 arena_width,
                 arena_height,
-                object_present,
+                no_object,
                 reverse_rotation,
                 robot_flipped,
+                !listen,
             ))
         } else {
             Box::new(FileEventSource::new(
@@ -78,6 +83,8 @@ impl MyApp {
             latest_vbat: 0.0,
             show_planner_theta: false,
             theta_offset: 0.0,
+            incoming_rx: None,
+            outgoing_tx: None,
         }
     }
 
@@ -114,6 +121,9 @@ impl MyApp {
                 .to_vec();
         }
         self.current_event_idx += 1;
+        if let Some(tx) = &self.outgoing_tx {
+            let _ = tx.send(event.clone());
+        }
     }
 
     fn configure_fonts(&self, ctx: &egui::Context) {
@@ -222,6 +232,16 @@ impl eframe::App for MyApp {
                 } else {
                     break;
                 }
+            }
+        }
+
+        if let Some(rx) = &self.incoming_rx {
+            while let Ok(mut event) = rx.try_recv() {
+                let current_ts = self.event_source.get_logic().unwrap().detector.last_ts.unwrap_or(0);
+                if let InputEvent::WifiControl(_, mode, r, m, t) = event {
+                    event = InputEvent::WifiControl(current_ts, mode, r, m, t);
+                }
+                self.event_source.inject_event(event);
             }
         }
 
@@ -847,12 +867,12 @@ impl eframe::App for MyApp {
                     }
                 }
 
+                // Draw detection and movement vectors as large dots after rotation
+                let dot_radius = 10.0;
                 if let Some(event) = &self.latest_planner {
                     if let InputEvent::Planner(ts, plan, cw, os, op, theta, rpm) = event {
                         let offset = self.theta_offset;
 
-                        // Draw detection and movement vectors as large dots after rotation
-                        let dot_radius = 10.0;
                         if plan.movement_x != 0.0 || plan.movement_y != 0.0 {
                             let (rot_x, rot_y) =
                                 self.rotate_point(plan.movement_x, plan.movement_y, offset);

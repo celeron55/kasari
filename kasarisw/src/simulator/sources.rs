@@ -40,6 +40,9 @@ pub trait EventSource {
         false
     }
     fn set_robot_flipped(&mut self, robot_flipped: bool) {}
+    fn inject_event(&mut self, event: InputEvent) {
+        self.get_logic_mut().unwrap().feed_event(event);
+    }
 }
 
 struct ReplayMirror {
@@ -296,6 +299,7 @@ pub struct SimEventSource {
     accelerometer_event_count: u64,
     rng: StdRng,
     robot_flipped: bool,
+    auto_inject_wifi: bool,
 }
 
 impl SimEventSource {
@@ -307,6 +311,7 @@ impl SimEventSource {
         no_object: bool,
         reverse_rotation: bool,
         robot_flipped: bool,
+        auto_inject_wifi: bool,
     ) -> Self {
         let channel = &*CHANNEL.init(PubSubChannel::new());
         let mut source = Self {
@@ -347,18 +352,21 @@ impl SimEventSource {
             next_accel_ts: 10_000,
             next_lidar_ts: 2083,
             last_lidar_ts: 0,
-            next_wifi_ts: 100_000,
+            next_wifi_ts: if auto_inject_wifi { 100_000 } else { u64::MAX },
             lidar_distance_offset,
             debug,
             accelerometer_event_count: 0,
             rng: StdRng::seed_from_u64(42),
-            robot_flipped: false,
+            robot_flipped,
+            auto_inject_wifi,
         };
 
-        // Initial events at ts=0
-        let wifi_event = InputEvent::WifiControl(0, 2, 0.0, 0.0, 0.0);
-        source.event_buffer.push_back(wifi_event.clone());
-        source.control_logic.feed_event(wifi_event);
+        if auto_inject_wifi {
+            // Initial events at ts=0
+            let wifi_event = InputEvent::WifiControl(0, 2, 0.0, 0.0, 0.0);
+            source.event_buffer.push_back(wifi_event.clone());
+            source.control_logic.feed_event(wifi_event);
+        }
 
         let vbat_event = InputEvent::Vbat(0, 12.0);
         source.event_buffer.push_back(vbat_event.clone());
@@ -408,10 +416,10 @@ impl SimEventSource {
             let next_vbat = self.next_vbat_ts;
             let next_accel = self.next_accel_ts;
             let next_lidar = self.next_lidar_ts;
-            let next_wifi = self.next_wifi_ts;
+            let next_wifi = if self.auto_inject_wifi { self.next_wifi_ts } else { u64::MAX };
             let next_step = self.last_step_ts + 20_000;
 
-            let next_ts = [next_vbat, next_accel, next_lidar, next_step, target_ts + 1]
+            let next_ts = [next_vbat, next_accel, next_lidar, next_wifi, next_step, target_ts + 1]
                 .iter()
                 .cloned()
                 .min()
@@ -494,7 +502,7 @@ impl SimEventSource {
                 self.next_lidar_ts += 2083;
             }
 
-            if next_wifi <= next_ts {
+            if self.auto_inject_wifi && next_wifi <= next_ts {
                 let event = InputEvent::WifiControl(next_wifi, 2, 0.0, 0.0, 0.0);
                 self.event_buffer.push_back(event.clone());
                 self.control_logic.feed_event(event);
@@ -547,6 +555,11 @@ impl EventSource for SimEventSource {
     fn get_logic(&self) -> Option<&MainLogic> {
         Some(&self.control_logic)
     }
+
+    fn get_logic_mut(&mut self) -> Option<&mut MainLogic> {
+        Some(&mut self.control_logic)
+    }
+
     fn get_robot_flipped(&self) -> bool {
         self.robot_flipped
     }

@@ -33,6 +33,7 @@ egui_plot = "0.28"  # If needed separately; often bundled with egui/eframe
 serde_json = "1.0"  # For JSON parsing
 rand = "0.8"
 ctrlc = "3.4.5"
+crossbeam-channel = "0.5.15"
 
 [target.'xtensa-esp32-none-elf'.dependencies]
 xtensa-lx-rt = { version = "0.19.0", features = ["esp32"] }

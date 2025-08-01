@@ -32,6 +32,8 @@ FileEventSource handles event sourcing (including synthetic injections like
 events for consistent visualization. MyApp queries the EventSource trait for
 logic data (e.g., detector, plans) uniformly, avoiding duplication. Flags like
 --reverse-rotation are applied to each source's logic for RPM consistency.
+--listen allows controlling the simulator using the same tools used to control
+the robot over wifi.
 
 ## Project Structure
 - `src/embedded.rs`: ESP32 firmware entrypoint.
@@ -72,7 +74,7 @@ logic data (e.g., detector, plans) uniformly, avoiding duplication. Flags like
 ### PC Simulator
 ```sh
 cargo +stable build-pc  # Alias for cargo build --features pc
-./target/debug/simulator [OPTIONS] [SOURCE]  # SOURCE: log file or --sim for virtual
+./target/debug/simulator [OPTIONS] [SOURCE]  # SOURCE: log file or --sim for virtual and --listen for listening to control tools
 ```
 Options: --debug, --inject-autonomous, --lidar-distance-offset <MM>, --sim.
 
