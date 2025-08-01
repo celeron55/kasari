@@ -46,7 +46,9 @@ the robot over wifi.
 - `src/simulator/physics.rs`: Virtual world raycasting, robot physics.
 - `src/simulator/sources.rs`: Event sources (file replay or simulation).
 - `tools/event_monitor.py`: Tkinter GUI for monitoring/controls/logging.
+- `tools/download_events.py`: CLI for downloading events from robot's flash storage
 - `tools/parse_events.py`: CLI binary event parser to JSON.
+- `tools/combat_wizard.py`: Tkinter GUI for combat workflow. Combines event_monitor.py and download_events.py functionalities into one tool
 - `rust-toolchain.toml`: Specifies ESP toolchain (channel: esp, target: xtensa-esp32-none-elf).
 - `config.toml`: Cargo config with target rustflags, unstable build-std, aliases (build-pc, build-esp, run-esp).
 
