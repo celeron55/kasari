@@ -132,6 +132,8 @@ BATCH_FLUSH_SIZE = 4096
 BATCH_DATA_SIZE = BATCH_FLUSH_SIZE - 4
 
 def download_logs(host, timestamp_str, log_dir):
+    if host == "dummy":
+        return [], []
     port = 8081
     sock = None
     for attempt in range(60):
@@ -324,7 +326,7 @@ class CombatWizard:
 
     def step_choose_address(self):
         ttk.Label(self.workflow_frame, text="Choose robot address:").grid(row=0, column=0, sticky=tk.W)
-        self.host_entry = ttk.Combobox(self.workflow_frame, values=["192.168.2.1", "192.168.1.248", "127.0.0.1"])
+        self.host_entry = ttk.Combobox(self.workflow_frame, values=["192.168.2.1", "192.168.1.248", "127.0.0.1", "dummy"])
         self.host_entry.set("192.168.2.1")
         self.host_entry.grid(row=0, column=1, sticky=tk.W)
         
@@ -335,9 +337,24 @@ class CombatWizard:
         self.log_dir = 'sim_log' if self.host == '127.0.0.1' else 'log'
         os.makedirs(self.log_dir, exist_ok=True)
         self.host_port = f"{self.host}:8080"
-        self.step = 2
-        self.update_workflow()
-        self.connect()
+        if self.host == "dummy":
+            self.running = True
+            self.thread = threading.Thread(target=self.dummy_streaming, daemon=True)
+            self.thread.start()
+            status_queue.put("Connected (dummy)")
+            self.step = 3
+            self.update_workflow()
+        else:
+            self.step = 2
+            self.update_workflow()
+            self.connect()
+
+    def dummy_streaming(self):
+        while self.running:
+            ts = int(time.time() * 1000000)
+            event = ('Vbat', ts, 12.0)
+            event_queue.put(event)
+            time.sleep(1)
 
     def step_connecting(self):
         base_text = "Power on the robot and connect to its WiFi network.\nWaiting for connection..."
